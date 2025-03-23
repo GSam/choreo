@@ -90,6 +90,9 @@ def readRequest: IO[Request] =
   yield req
 ```
 
+## Running examples
+`sbt "project examples"  run`
+
 ## License
 
 This library is released under the same license as HasChor, namely the BSD-3 license.
