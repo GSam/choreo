@@ -56,7 +56,7 @@ class LocalSuite extends CatsEffectSuite {
     val c: Choreo[IO, Int @@ "alice"] =
       alice.locally(IO.pure(42))
 
-    val network = Endpoint.project(c, alice)
+    val network = Endpoint.project(c, alice, Set(alice))
 
     for
       backend <- Backend.local[IO](List(alice))
@@ -68,7 +68,7 @@ class LocalSuite extends CatsEffectSuite {
     val c: Choreo[IO, Int @@ "alice"] =
       alice.locally(IO.pure(42))
 
-    val network = Endpoint.project(c, bob)
+    val network = Endpoint.project(c, bob, Set(alice, bob))
 
     for
       backend <- Backend.local[IO](List(alice, bob))
@@ -85,8 +85,8 @@ class LocalSuite extends CatsEffectSuite {
 
     for
       backend <- Backend.local[IO](List(alice, bob))
-      aliceNet = Endpoint.project(c, alice)
-      bobNet   = Endpoint.project(c, bob)
+      aliceNet = Endpoint.project(c, alice, Set(alice, bob))
+      bobNet   = Endpoint.project(c, bob, Set(alice, bob))
       fiber   <- backend.runNetwork(alice)(aliceNet).start
       result  <- backend.runNetwork(bob)(bobNet)
       _       <- fiber.joinWithNever
@@ -298,11 +298,53 @@ class LocalSuite extends CatsEffectSuite {
     yield {
       assertEquals(aLog, List("alice:decide", "alice:receive"))
       assertEquals(bLog, List("bob:compute"))
-      // With naive EPP, carol receives the broadcast and projects the full branch,
-      // so her locally block DOES run even though she's not meaningfully involved.
-      // This documents the current behavior — a "knowledge of choice" optimization
-      // would allow skipping uninvolved participants.
+      // Carol IS mentioned in the branch (carol.locally), so knowledge of choice
+      // correctly identifies her as involved — her locally block runs.
       assertEquals(cLog, List("carol:should-not-run"))
+    }
+  }
+
+  test("Cond: knowledge of choice excludes truly uninvolved party") {
+    for
+      aliceLog <- Ref.of[IO, List[String]](Nil)
+      bobLog   <- Ref.of[IO, List[String]](Nil)
+      carolLog <- Ref.of[IO, List[String]](Nil)
+
+      choreo =
+        for
+          flag   <- alice.locally:
+                      aliceLog.update(_ :+ "alice:decide") *> IO.pure(true)
+          result <- alice.cond(flag) {
+                      case true  =>
+                        for
+                          v <- bob.locally:
+                                 bobLog.update(_ :+ "bob:compute") *> IO.pure("ok")
+                          r <- bob.send(v).to(alice)
+                          _ <- alice.locally:
+                                 aliceLog.update(_ :+ "alice:receive")
+                        yield r
+                      case false =>
+                        alice.locally(IO.pure("nope"))
+                    }
+        yield result
+
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- choreo.project(backend, alice).start
+      bobFib   <- choreo.project(backend, bob).start
+      carolFib <- choreo.project(backend, carol).start
+      _        <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+      _        <- carolFib.joinWithNever
+
+      aLog <- aliceLog.get
+      bLog <- bobLog.get
+      cLog <- carolLog.get
+    yield {
+      assertEquals(aLog, List("alice:decide", "alice:receive"))
+      assertEquals(bLog, List("bob:compute"))
+      // Carol is NOT mentioned in any branch — knowledge of choice
+      // correctly identifies her as uninvolved, so she skips projection.
+      assertEquals(cLog, Nil)
     }
   }
 

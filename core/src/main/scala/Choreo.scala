@@ -13,7 +13,7 @@ type Choreo[M[_], A] = Free[[X] =>> ChoreoSig[M, X], A]
 
 extension [M[_], A](c: Choreo[M, A])
   def project[B](backend: B, at: Loc)(using B: Backend[B, M]): M[A] =
-    backend.runNetwork(at)(Endpoint.project(c, at))
+    backend.runNetwork(at)(Endpoint.project(c, at, backend.locs))
 
 object Choreo:
   def pure[M[_], A](a: A): Choreo[M, A] = Free.pure(a)

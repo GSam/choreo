@@ -2,6 +2,7 @@ package choreo
 
 import cats.Monad
 import cats.free.Free
+import cats.data.Writer
 import cats.effect.IO
 import cats.syntax.all.*
 import cats.arrow.FunctionK
@@ -36,11 +37,12 @@ object Network:
     Network.pure(At.empty[A, L])
 
 object Endpoint:
-  def project[M[_], A](c: Choreo[M, A], at: Loc): Network[M, A] =
-    c.foldMap(epp[M](at).toFunctionK)
+  def project[M[_], A](c: Choreo[M, A], at: Loc, locs: Set[Loc]): Network[M, A] =
+    c.foldMap(epp[M](at, locs).toFunctionK)
 
   private[choreo] def epp[M[_]](
-      at: Loc
+      at: Loc,
+      locs: Set[Loc]
   ): [A] => ChoreoSig[M, A] => Network[M, A] = [A] =>
     (c: ChoreoSig[M, A]) =>
       c match
@@ -54,5 +56,41 @@ object Endpoint:
           else Network.empty[M, a.Value, a.Location]
 
         case ChoreoSig.Cond(loc, a, f) =>
-          if at == loc then Network.broadcast(unwrap(a)) *> project(f(unwrap(a)), at)
-          else Network.recv(loc).flatMap(a => project(f(a.asInstanceOf), at))
+          if at == loc then
+            val value    = unwrap(a)
+            val branch   = f(value)
+            val involved = collectLocations(branch, locs)
+            val sends    = (locs - loc).toList.traverse_ { l =>
+              if involved.contains(l) then Network.send[M, Any](Some(value), l)
+              else Network.send[M, Any](None, l)
+            }
+            sends *> project(branch, at, locs)
+          else
+            Network.recv[M, Any](loc).flatMap {
+              case Some(value) => project(f(value.asInstanceOf), at, locs)
+              case None        => Free.pure(null.asInstanceOf[A])
+              case value       => project(f(value.asInstanceOf), at, locs)
+            }
+
+  private[choreo] def collectLocations[M[_], A](
+      c: Choreo[M, A],
+      allLocs: Set[Loc]
+  ): Set[Loc] =
+    type W[X] = Writer[Set[Loc], X]
+
+    val collector: [X] => ChoreoSig[M, X] => W[X] = [X] =>
+      (sig: ChoreoSig[M, X]) =>
+        sig match
+          case ChoreoSig.Local(loc, _) =>
+            Writer(Set[Loc](loc), At.empty.asInstanceOf[X])
+
+          case ChoreoSig.Comm(src, _, dst) =>
+            Writer(Set[Loc](src, dst), At.empty.asInstanceOf[X])
+
+          case ChoreoSig.Cond(loc, a, f) =>
+            val innerLocs = a match
+              case At.Wrap(v) => collectLocations(f(v), allLocs)
+              case _          => allLocs
+            Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
+
+    c.foldMap(collector.toFunctionK).written
