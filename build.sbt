@@ -3,7 +3,7 @@ ThisBuild / homepage     := Some(url("https://github.com/romac/choreo"))
 ThisBuild / licenses     := Seq(
   "BSD-3-Clause" -> url("https://opensource.org/licenses/BSD-3-Clause")
 )
-ThisBuild / developers := List(
+ThisBuild / developers   := List(
   Developer(
     id = "romac",
     name = "Romain Ruetschi",
@@ -11,7 +11,7 @@ ThisBuild / developers := List(
     url = url("https://github.com/romac")
   )
 )
-ThisBuild / scmInfo := Some(
+ThisBuild / scmInfo      := Some(
   ScmInfo(
     url("https://github.com/romac/choreo"),
     "scm:git:git@github.com:romac/choreo.git"
@@ -45,8 +45,8 @@ lazy val core = project
 lazy val examples = project
   .in(file("examples"))
   .settings(
-    name            := "choreo-examples",
-    publish / skip  := true,
+    name           := "choreo-examples",
+    publish / skip := true,
     libraryDependencies ++= Seq(
       "org.typelevel" %% "cats-core"   % Versions.cats,
       "org.typelevel" %% "cats-effect" % Versions.catsEffect

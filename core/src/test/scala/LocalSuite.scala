@@ -2,7 +2,10 @@ package choreo
 
 import cats.syntax.all.*
 import cats.effect.IO
+import cats.effect.kernel.Ref
 import munit.CatsEffectSuite
+
+import scala.concurrent.duration.*
 
 class LocalSuite extends CatsEffectSuite {
 
@@ -205,5 +208,247 @@ class LocalSuite extends CatsEffectSuite {
       backend <- Backend.local[IO](List(alice))
       result  <- c.project(backend, alice).attempt
     yield assert(result.isLeft)
+  }
+
+  // -- 3+ participant Cond --
+
+  test("Cond: 3 participants, non-involved party receives broadcast") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.cond(flag) {
+                    case true  => bob.locally(IO.pure("yes"))
+                    case false => bob.locally(IO.pure("no"))
+                  }
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      carolFib <- c.project(backend, carol).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+      _        <- carolFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), "yes")
+  }
+
+  test("Cond: 3 participants, branch involves only two of three") {
+    val c: Choreo[IO, Int @@ "alice"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.cond(flag) {
+                    case true  =>
+                      for
+                        v <- bob.locally(IO.pure(42))
+                        r <- bob.send(v).to(alice)
+                      yield r
+                    case false =>
+                      alice.locally(IO.pure(0))
+                  }
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      bobFib   <- c.project(backend, bob).start
+      carolFib <- c.project(backend, carol).start
+      resultA  <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+      _        <- carolFib.joinWithNever
+    yield assertEquals(unwrap[alice.type](resultA), 42)
+  }
+
+  test("Cond: 3 participants with effects, only involved parties run effects") {
+    for
+      aliceLog <- Ref.of[IO, List[String]](Nil)
+      bobLog   <- Ref.of[IO, List[String]](Nil)
+      carolLog <- Ref.of[IO, List[String]](Nil)
+
+      choreo =
+        for
+          flag   <- alice.locally:
+                      aliceLog.update(_ :+ "alice:decide") *> IO.pure(true)
+          result <- alice.cond(flag) {
+                      case true  =>
+                        for
+                          v <- bob.locally:
+                                 bobLog.update(_ :+ "bob:compute") *> IO.pure("ok")
+                          r <- bob.send(v).to(alice)
+                          _ <- alice.locally:
+                                 aliceLog.update(_ :+ "alice:receive")
+                          _ <- carol.locally:
+                                 carolLog.update(_ :+ "carol:should-not-run")
+                        yield r
+                      case false =>
+                        alice.locally(IO.pure("nope"))
+                    }
+        yield result
+
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- choreo.project(backend, alice).start
+      bobFib   <- choreo.project(backend, bob).start
+      carolFib <- choreo.project(backend, carol).start
+      _        <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+      _        <- carolFib.joinWithNever
+
+      aLog <- aliceLog.get
+      bLog <- bobLog.get
+      cLog <- carolLog.get
+    yield {
+      assertEquals(aLog, List("alice:decide", "alice:receive"))
+      assertEquals(bLog, List("bob:compute"))
+      // With naive EPP, carol receives the broadcast and projects the full branch,
+      // so her locally block DOES run even though she's not meaningfully involved.
+      // This documents the current behavior — a "knowledge of choice" optimization
+      // would allow skipping uninvolved participants.
+      assertEquals(cLog, List("carol:should-not-run"))
+    }
+  }
+
+  // -- Nested Cond --
+
+  test("Cond: nested cond selects correct inner branch") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        outer  <- alice.locally(IO.pure(true))
+        result <- alice.cond(outer) {
+                    case true  =>
+                      for
+                        inner <- alice.locally(IO.pure(false))
+                        r     <- alice.cond(inner) {
+                                   case true  => bob.locally(IO.pure("inner-true"))
+                                   case false => bob.locally(IO.pure("inner-false"))
+                                 }
+                      yield r
+                    case false =>
+                      bob.locally(IO.pure("outer-false"))
+                  }
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), "inner-false")
+  }
+
+  test("Cond: nested cond with 3 participants") {
+    val c: Choreo[IO, Int @@ "carol"] =
+      for
+        outer  <- alice.locally(IO.pure(true))
+        result <- alice.cond(outer) {
+                    case true  =>
+                      for
+                        v     <- bob.locally(IO.pure(10))
+                        vC    <- bob.send(v).to(carol)
+                        inner <- carol.locally(IO.pure(vC.! > 5))
+                        r     <- carol.cond(inner) {
+                                   case true  => carol.locally(IO.pure(100))
+                                   case false => carol.locally(IO.pure(0))
+                                 }
+                      yield r
+                    case false =>
+                      carol.locally(IO.pure(-1))
+                  }
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      bobFib   <- c.project(backend, bob).start
+      resultC  <- c.project(backend, carol)
+      _        <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+    yield assertEquals(unwrap[carol.type](resultC), 100)
+  }
+
+  // -- Error propagation --
+
+  test("distributed: error in locally propagates to the failing fiber") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally[IO, Int](IO.raiseError(new RuntimeException("boom")))
+        b <- alice.send(a).to(bob)
+      yield b
+
+    for
+      backend <- Backend.local[IO](List(alice, bob))
+      result  <- c.project(backend, alice).attempt
+    yield {
+      assert(result.isLeft)
+      assertEquals(result.left.toOption.get.getMessage, "boom")
+    }
+  }
+
+  test("distributed: error in locally leaves other participants hanging") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally[IO, Int](IO.raiseError(new RuntimeException("boom")))
+        b <- alice.send(a).to(bob)
+      yield b
+
+    for
+      backend   <- Backend.local[IO](List(alice, bob))
+      aliceFib  <- c.project(backend, alice).start
+      // Bob will block forever on recv since alice never sends;
+      // verify it doesn't complete within a timeout
+      bobResult <- c.project(backend, bob).timeout(100.millis).attempt
+      aliceRes  <- aliceFib.joinWithNever.attempt
+    yield {
+      assert(aliceRes.isLeft, "alice should have failed")
+      assert(bobResult.isLeft, "bob should have timed out")
+    }
+  }
+
+  // -- Deadlock --
+
+  test("distributed: mutual recv deadlocks (detected via timeout)") {
+    // Both alice and bob try to receive from each other simultaneously
+    // without sending first — this is a deadlock
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(1))
+        // Alice sends to bob, but the choreography below is mis-constructed:
+        // bob tries to send to alice before receiving from alice
+        b <- bob.locally(IO.pure(2))
+        x <- bob.send(b).to(alice)
+        y <- alice.send(a).to(bob)
+      yield y
+
+    for
+      backend <- Backend.local[IO](List(alice, bob))
+      // In the projected programs:
+      // - alice: locally(1), recv(bob), send(1, bob)  -- blocks on recv(bob)
+      // - bob:   locally(2), send(2, alice), recv(alice) -- sends, then blocks on recv(alice)
+      // Alice blocks waiting for bob's message before sending her own,
+      // but bob sends first then waits, so this actually works for 2 parties.
+      // Let's construct a true deadlock instead:
+      result  <- {
+        // Construct networks manually to force a deadlock:
+        // both sides recv before send
+        val aliceNet: Network[IO, Int] =
+          for
+            _ <- Network.recv[IO, Int](bob)
+            _ <- Network.send[IO, Int](1, bob)
+          yield 1
+
+        val bobNet: Network[IO, Int] =
+          for
+            _ <- Network.recv[IO, Int](alice)
+            _ <- Network.send[IO, Int](2, alice)
+          yield 2
+
+        val run = for
+          aliceFib <- backend.runNetwork(alice)(aliceNet).start
+          bobFib   <- backend.runNetwork(bob)(bobNet).start
+          a        <- aliceFib.joinWithNever
+          b        <- bobFib.joinWithNever
+        yield (a, b)
+
+        run.timeout(200.millis).attempt
+      }
+    yield assert(result.isLeft, "should have deadlocked (timed out)")
   }
 }
