@@ -4,14 +4,15 @@ import cats.syntax.all.*
 import cats.effect.IO
 import cats.effect.kernel.Ref
 import munit.CatsEffectSuite
+import scodec.Codec
 
 class BooksellerSuite extends CatsEffectSuite {
 
   val buyer: "buyer"   = "buyer"
   val seller: "seller" = "seller"
 
-  case class Book(title: String, price: Double)
-  case class Date(year: Int, month: Int, day: Int)
+  case class Book(title: String, price: Double) derives Codec
+  case class Date(year: Int, month: Int, day: Int) derives Codec
 
   val catalog = Map(
     "Types and Programming Languages" -> Book("Types and Programming Languages", 80.0),

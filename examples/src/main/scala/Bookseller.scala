@@ -5,10 +5,11 @@ package bookseller
 import cats.effect.IO
 import cats.effect.IO.asyncForIO
 import cats.syntax.all.*
+import scodec.Codec
 
-case class Book(title: String, price: Double)
+case class Book(title: String, price: Double) derives Codec
 
-case class Date(year: Int, month: Int, day: Int):
+case class Date(year: Int, month: Int, day: Int) derives Codec:
   override def toString(): String = s"$year-$month-$day"
 
 val books = List(

@@ -6,14 +6,21 @@ import cats.effect.std.Queue
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 
-import java.io.{ObjectInputStream, ObjectOutputStream}
+import java.io.{
+  ByteArrayInputStream,
+  ByteArrayOutputStream,
+  DataInputStream,
+  DataOutputStream,
+  ObjectInputStream,
+  ObjectOutputStream
+}
 import java.net.{InetSocketAddress, ServerSocket, Socket}
 
 import choreo.utils.toFunctionK
 
 class TcpBackend[M[_]: Async] private (
     inboxes: Map[Channel, Queue[M, Any]],
-    outputs: Map[Channel, ObjectOutputStream],
+    outputs: Map[Channel, DataOutputStream],
     val locs: Seq[Loc]
 ):
 
@@ -34,9 +41,14 @@ class TcpBackend[M[_]: Async] private (
           val out = outputs((from = at, to = to))
           Async[M].blocking {
             out.synchronized {
-              out.writeObject(a)
+              val baos  = new ByteArrayOutputStream()
+              val oos   = new ObjectOutputStream(baos)
+              oos.writeObject(a)
+              oos.flush()
+              val bytes = baos.toByteArray
+              out.writeInt(bytes.length)
+              out.write(bytes)
               out.flush()
-              out.reset()
             }
           }
 
@@ -56,7 +68,8 @@ object TcpBackend:
   /** Creates a cluster of TCP-connected locations in a single process.
     *
     * Each location gets its own server socket on localhost. Connections are established eagerly
-    * between all pairs. Messages are serialized using Java's ObjectOutputStream.
+    * between all pairs. Messages are serialized using Java ObjectOutputStream over length-prefixed
+    * binary frames.
     *
     * The returned Resource manages all sockets and background reader fibers.
     */
@@ -91,12 +104,15 @@ object TcpBackend:
               for
                 result       <- Async[M].blocking {
                                   val socket = server.accept()
-                                  val ois    = new ObjectInputStream(socket.getInputStream)
-                                  val sender = ois.readObject().asInstanceOf[String]
-                                  (sender, ois)
+                                  val dis    = new DataInputStream(socket.getInputStream)
+                                  val len    = dis.readInt()
+                                  val buf    = new Array[Byte](len)
+                                  dis.readFully(buf)
+                                  val sender = new String(buf, "UTF-8")
+                                  (sender, dis)
                                 }
-                (sender, ois) = result
-                _            <- readLoop(ois, inboxes((from = sender, to = loc))).start
+                (sender, dis) = result
+                _            <- readLoop(dis, inboxes((from = sender, to = loc))).start
               yield ()
             }
           }
@@ -114,27 +130,36 @@ object TcpBackend:
                          Async[M].blocking {
                            val socket = new Socket()
                            socket.connect(new InetSocketAddress("localhost", port))
-                           val oos    = new ObjectOutputStream(socket.getOutputStream)
-                           oos.writeObject(ch.from: String)
-                           oos.flush()
-                           (ch, socket, oos)
+                           val dos    = new DataOutputStream(socket.getOutputStream)
+                           // Identify ourselves with a length-prefixed string
+                           val id     = ch.from.getBytes("UTF-8")
+                           dos.writeInt(id.length)
+                           dos.write(id)
+                           dos.flush()
+                           (ch, socket, dos)
                          }
                        ) { case (_, socket, _) =>
                          Async[M].blocking(socket.close())
                        }
                    }
-                   .map(_.map { case (ch, _, oos) => ch -> oos }.toMap)
+                   .map(_.map { case (ch, _, dos) => ch -> dos }.toMap)
 
       // 5. Wait for all acceptors to finish
       _ <- Resource.eval(ready.get)
     yield TcpBackend(inboxes, outputs, locs)
 
   private def readLoop[M[_]: Async](
-      ois: ObjectInputStream,
+      dis: DataInputStream,
       inbox: Queue[M, Any]
   ): M[Unit] =
     Async[M]
-      .blocking(ois.readObject())
+      .blocking {
+        val len = dis.readInt()
+        val buf = new Array[Byte](len)
+        dis.readFully(buf)
+        val ois = new ObjectInputStream(new ByteArrayInputStream(buf))
+        ois.readObject()
+      }
       .flatMap(inbox.offer)
       .foreverM
       .handleErrorWith {

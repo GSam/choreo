@@ -6,6 +6,7 @@ import cats.effect.IO
 import cats.effect.kernel.Concurrent
 import cats.syntax.all.*
 import cats.arrow.FunctionK
+import scodec.Codec
 
 import choreo.utils.toFunctionK
 
@@ -21,9 +22,11 @@ object Choreo:
 enum ChoreoSig[M[_], A]:
   case Local[M[_], A, L <: Loc](l: L, m: Unwrap[L] => M[A]) extends ChoreoSig[M, A @@ L]
 
-  case Comm[M[_], A, L0 <: Loc, L1 <: Loc](l0: L0, a: A @@ L0, l1: L1) extends ChoreoSig[M, A @@ L1]
+  case Comm[M[_], A, L0 <: Loc, L1 <: Loc](l0: L0, a: A @@ L0, l1: L1, codec: Codec[A])
+      extends ChoreoSig[M, A @@ L1]
 
-  case Cond[M[_], A, B, L <: Loc](l: L, a: A @@ L, f: A => Choreo[M, B]) extends ChoreoSig[M, B]
+  case Cond[M[_], A, B, L <: Loc](l: L, a: A @@ L, f: A => Choreo[M, B], codec: Codec[A])
+      extends ChoreoSig[M, B]
 
 extension [L <: Loc](l: L)
   def locally[M[_], A](m: Unwrap[l.type] ?=> M[A]): Choreo[M, A @@ l.type] =
@@ -31,14 +34,14 @@ extension [L <: Loc](l: L)
 
   def send[A](a: A @@ L): Sendable[A, L] = (src = l, value = a)
 
-  def cond[M[_], A, B](a: A @@ L)(f: A => Choreo[M, B]): Choreo[M, B] =
-    Free.liftF(ChoreoSig.Cond(l, a, f))
+  def cond[M[_], A, B](a: A @@ L)(f: A => Choreo[M, B])(using codec: Codec[A]): Choreo[M, B] =
+    Free.liftF(ChoreoSig.Cond(l, a, f, codec))
 
 opaque type Sendable[A, L <: Loc] = (src: L, value: A @@ L)
 
 extension [A, Src <: Loc](s: Sendable[A, Src])
-  def to[M[_], Dst <: Loc](dst: Dst): Choreo[M, A @@ dst.type] =
-    Free.liftF(ChoreoSig.Comm(s.src, s.value, dst))
+  def to[M[_], Dst <: Loc](dst: Dst)(using codec: Codec[A]): Choreo[M, A @@ dst.type] =
+    Free.liftF(ChoreoSig.Comm(s.src, s.value, dst, codec))
 
 extension [M[_], A](c: Choreo[M, A])
   def runLocal(using M: Monad[M]): M[A] =
@@ -52,8 +55,8 @@ extension [M[_], A](c: Choreo[M, A])
         case ChoreoSig.Local(l, m) =>
           m(unwrap).map(wrap(_).asInstanceOf)
 
-        case ChoreoSig.Comm(l0, a, l1) =>
+        case ChoreoSig.Comm(l0, a, l1, _) =>
           M.pure(wrap(unwrap(a)).asInstanceOf)
 
-        case ChoreoSig.Cond(l, a, f) =>
+        case ChoreoSig.Cond(l, a, f, _) =>
           f(unwrap(a)).runLocal

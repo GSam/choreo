@@ -4,9 +4,9 @@ import cats.syntax.all.*
 import cats.effect.IO
 import cats.effect.kernel.Ref
 import munit.CatsEffectSuite
+import scodec.Codec
 
-// Top-level to be Java-serializable over TCP
-case class DeliveryDate(year: Int, month: Int, day: Int)
+case class DeliveryDate(year: Int, month: Int, day: Int) derives Codec
 
 class TcpSuite extends CatsEffectSuite {
 
