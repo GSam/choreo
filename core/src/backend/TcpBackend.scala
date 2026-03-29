@@ -7,14 +7,7 @@ import cats.effect.std.Queue
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 
-import java.io.{
-  ByteArrayInputStream,
-  ByteArrayOutputStream,
-  DataInputStream,
-  DataOutputStream,
-  ObjectInputStream,
-  ObjectOutputStream
-}
+import java.io.{DataInputStream, DataOutputStream}
 import java.net.{InetSocketAddress, ServerSocket, Socket}
 
 import choreo.utils.toFunctionK
@@ -22,7 +15,8 @@ import choreo.utils.toFunctionK
 class TcpBackend[M[_]: Async] private (
     inboxes: Map[Channel, Queue[M, Any]],
     outputs: Map[Channel, DataOutputStream],
-    val locs: Seq[Loc]
+    val locs: Seq[Loc],
+    codec: WireCodec
 ):
 
   def runNetwork[A](at: Loc)(
@@ -42,11 +36,7 @@ class TcpBackend[M[_]: Async] private (
           val out = outputs((from = at, to = to))
           Async[M].blocking {
             out.synchronized {
-              val baos  = new ByteArrayOutputStream()
-              val oos   = new ObjectOutputStream(baos)
-              oos.writeObject(a)
-              oos.flush()
-              val bytes = baos.toByteArray
+              val bytes = codec.encode(a)
               out.writeInt(bytes.length)
               out.write(bytes)
               out.flush()
@@ -69,12 +59,15 @@ object TcpBackend:
   /** Creates a cluster of TCP-connected locations in a single process.
     *
     * Each location gets its own server socket on localhost. Connections are established eagerly
-    * between all pairs. Messages are serialized using Java ObjectOutputStream over length-prefixed
-    * binary frames.
+    * between all pairs. Messages are serialized using the provided [[WireCodec]] over
+    * length-prefixed binary frames.
     *
     * The returned Resource manages all sockets and background reader fibers.
     */
-  def local[M[_]: Async](locs: List[Loc]): Resource[M, TcpBackend[M]] =
+  def local[M[_]: Async](
+      locs: List[Loc],
+      codec: WireCodec = WireCodec.javaSerialization
+  ): Resource[M, TcpBackend[M]] =
     val channels = for { s <- locs; r <- locs; if s != r } yield (from = s, to = r)
 
     for
@@ -113,7 +106,7 @@ object TcpBackend:
                                   (sender, dis)
                                 }
                 (sender, dis) = result
-                _            <- readLoop(dis, inboxes((from = sender, to = loc))).start
+                _            <- readLoop(dis, inboxes((from = sender, to = loc)), codec).start
               yield ()
             }
           }
@@ -147,19 +140,19 @@ object TcpBackend:
 
       // 5. Wait for all acceptors to finish
       _ <- Resource.eval(ready.get)
-    yield TcpBackend(inboxes, outputs, locs)
+    yield TcpBackend(inboxes, outputs, locs, codec)
 
   private def readLoop[M[_]: Async](
       dis: DataInputStream,
-      inbox: Queue[M, Any]
+      inbox: Queue[M, Any],
+      codec: WireCodec
   ): M[Unit] =
     Async[M]
       .blocking {
         val len = dis.readInt()
         val buf = new Array[Byte](len)
         dis.readFully(buf)
-        val ois = new ObjectInputStream(new ByteArrayInputStream(buf))
-        ois.readObject()
+        codec.decode(buf)
       }
       .flatMap(inbox.offer)
       .foreverM
