@@ -15,10 +15,7 @@ trait Backend[B, M[_]]:
   extension (backend: B) def locs: Set[Loc]
 
 object Backend:
-  def local[M[_]: Concurrent](
-      locs: List[Loc]
-  ): M[LocalBackend[M]] =
-    for inboxes <- LocalBackend.makeInboxes(locs)
-    yield LocalBackend(inboxes, locs)
+  val local = LocalBackend
+  val tcp   = TcpBackend
 
 type Channel = (from: Loc, to: Loc)

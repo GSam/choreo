@@ -40,6 +40,10 @@ class LocalBackend[M[_]](inboxes: Map[Channel, Queue[M, Any]], val locs: Seq[Loc
             }
 
 object LocalBackend:
+  def apply[M[_]: Concurrent](locs: Seq[Loc]): M[LocalBackend[M]] =
+    for inboxes <- makeInboxes(locs)
+    yield new LocalBackend(inboxes, locs)
+
   def makeInboxes[M[_]: Concurrent](
       locs: Seq[Loc]
   ): M[Map[Channel, Queue[M, Any]]] =
