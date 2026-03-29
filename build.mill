@@ -1,7 +1,9 @@
 //| mill-version: 1.1.5
+//| mvnDeps: ["com.lihaoyi::mill-contrib-scoverage:$MILL_VERSION"]
 package build
 
 import mill.*, scalalib.*, scalalib.publish.*
+import mill.contrib.scoverage.ScoverageModule
 
 object versions {
   val choreo          = "0.1.0"
@@ -16,7 +18,8 @@ trait ChoreoModule extends ScalaModule {
   def scalaVersion = versions.scala3
 }
 
-object core extends ChoreoModule with PublishModule {
+object core extends ChoreoModule with PublishModule with ScoverageModule {
+  def scoverageVersion = "2.1.1"
   def artifactName = "choreo"
 
   def publishVersion = versions.choreo
@@ -38,7 +41,7 @@ object core extends ChoreoModule with PublishModule {
     mvn"org.typelevel::cats-effect:${versions.catsEffect}"
   )
 
-  object test extends ScalaTests with TestModule.Munit {
+  object test extends ScoverageTests with TestModule.Munit {
     def mvnDeps = Seq(
       mvn"org.scalameta::munit:${versions.munit}",
       mvn"org.typelevel::munit-cats-effect:${versions.munitCatsEffect}"
