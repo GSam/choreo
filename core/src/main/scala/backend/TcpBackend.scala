@@ -1,4 +1,5 @@
 package choreo
+package backend
 
 import cats.Monad
 import cats.effect.{Async, Deferred, Resource}
