@@ -4,9 +4,10 @@ import cats.syntax.all.*
 import cats.effect.IO
 import cats.effect.kernel.Ref
 import munit.CatsEffectSuite
-import scodec.Codec
 
-case class DeliveryDate(year: Int, month: Int, day: Int) derives Codec
+import choreo.backend.TcpBackend
+
+case class DeliveryDate(year: Int, month: Int, day: Int)
 
 class TcpSuite extends CatsEffectSuite {
 

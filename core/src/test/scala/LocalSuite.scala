@@ -1,12 +1,13 @@
 package choreo
 
+import scala.concurrent.duration.*
+
 import cats.syntax.all.*
 import cats.effect.IO
 import cats.effect.kernel.Ref
 import munit.CatsEffectSuite
-import scodec.Codec
 
-import scala.concurrent.duration.*
+import choreo.backend.Backend
 
 class LocalSuite extends CatsEffectSuite {
 

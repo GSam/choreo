@@ -6,10 +6,6 @@ import cats.data.Writer
 import cats.effect.IO
 import cats.syntax.all.*
 import cats.arrow.FunctionK
-import scodec.Codec
-import scodec.bits.ByteVector
-import scodec.codecs as C
-
 import choreo.utils.toFunctionK
 
 enum NetworkSig[M[_], A]:
@@ -53,12 +49,12 @@ object Endpoint:
           if at == loc then Network.run(m(unwrap)).map(wrap.asInstanceOf)
           else Network.empty.asInstanceOf
 
-        case ChoreoSig.Comm(src, a, dst, _) =>
+        case ChoreoSig.Comm(src, a, dst) =>
           if at == src then Network.send(unwrap(a), dst) *> Network.empty.asInstanceOf
           else if at == dst then Network.recv(src).map(wrap.asInstanceOf)
           else Network.empty[M, a.Value, a.Location]
 
-        case ChoreoSig.Cond(loc, a, f, _) =>
+        case ChoreoSig.Cond(loc, a, f) =>
           if at == loc then
             val value    = unwrap(a)
             val branch   = f(value)
@@ -87,10 +83,10 @@ object Endpoint:
           case ChoreoSig.Local(loc, _) =>
             Writer(Set[Loc](loc), At.empty.asInstanceOf[X])
 
-          case ChoreoSig.Comm(src, _, dst, _) =>
+          case ChoreoSig.Comm(src, _, dst) =>
             Writer(Set[Loc](src, dst), At.empty.asInstanceOf[X])
 
-          case ChoreoSig.Cond(loc, a, f, _) =>
+          case ChoreoSig.Cond(loc, a, f) =>
             val innerLocs = a match
               case At.Wrap(v) => collectLocations(f(v), allLocs)
               case _          => allLocs

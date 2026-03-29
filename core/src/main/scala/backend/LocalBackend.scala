@@ -1,6 +1,13 @@
 package choreo
 package backend
 
+import cats.Monad
+import cats.effect.std.Queue
+import cats.effect.kernel.Concurrent
+import cats.syntax.all.*
+
+import choreo.utils.toFunctionK
+
 class LocalBackend[M[_]](inboxes: Map[Channel, Queue[M, Any]], val locs: Seq[Loc]):
 
   def runNetwork[A](at: Loc)(

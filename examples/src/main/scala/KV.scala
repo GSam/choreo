@@ -6,11 +6,12 @@ import cats.effect.IO
 import cats.effect.IO.asyncForIO
 import cats.effect.kernel.Ref
 import cats.syntax.all.*
-import scodec.Codec
+
+import _root_.choreo.backend.Backend
 
 type State = Map[String, String]
 
-enum Request derives Codec:
+enum Request:
   case Get(key: String)
   case Put(key: String, value: String)
 
