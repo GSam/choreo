@@ -14,8 +14,6 @@ object versions {
 
 trait ChoreoModule extends ScalaModule {
   def scalaVersion = versions.scala3
-  def sources = Task.Sources("src/main/scala")
-  def resources = Task.Sources("src/main/resources")
 }
 
 object core extends ChoreoModule with PublishModule {
@@ -41,9 +39,6 @@ object core extends ChoreoModule with PublishModule {
   )
 
   object test extends ScalaTests with TestModule.Munit {
-    def sources = Task.Sources(moduleDir / os.up / "src" / "test" / "scala")
-    def resources = Task.Sources(moduleDir / os.up / "src" / "test" / "resources")
-
     def mvnDeps = Seq(
       mvn"org.scalameta::munit:${versions.munit}",
       mvn"org.typelevel::munit-cats-effect:${versions.munitCatsEffect}"
