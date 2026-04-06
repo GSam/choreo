@@ -1,6 +1,7 @@
 package choreo
 package backend
 
+import cats.effect.Deferred
 import cats.effect.std.Queue
 import cats.effect.kernel.Concurrent
 import cats.syntax.all.*
@@ -30,6 +31,13 @@ class LocalBackend[M[_]](inboxes: Map[Channel, Queue[M, Any]], val locs: Seq[Loc
         case NetworkSig.Recv(from) =>
           val inbox = inboxes((from = from, to = at))
           inbox.take.map(_.asInstanceOf[A])
+
+        case NetworkSig.AsyncRecv(from) =>
+          val inbox = inboxes((from = from, to = at))
+          (for
+            d <- Deferred[M, Any]
+            _ <- M.start(inbox.take.flatMap(v => d.complete(v).void))
+          yield d.get).asInstanceOf[M[A]]
 
         case NetworkSig.Broadcast(a) =>
           locs

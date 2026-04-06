@@ -270,7 +270,7 @@ class LocalSuite extends CatsEffectSuite {
       for
         flag   <- alice.locally(IO.pure(true))
         result <- alice.select(flag)(
-                    true -> (for
+                    true  -> (for
                       v <- bob.locally(IO.pure(42))
                       r <- bob.send(v).to(alice)
                     yield r),
@@ -318,10 +318,10 @@ class LocalSuite extends CatsEffectSuite {
 
       choreo =
         for
-          flag <- alice.locally:
-                    aliceLog.update(_ :+ "alice:decide") *> IO.pure(true)
+          flag   <- alice.locally:
+                      aliceLog.update(_ :+ "alice:decide") *> IO.pure(true)
           result <- alice.select(flag)(
-                      true -> (for
+                      true  -> (for
                         v <- bob.locally:
                                bobLog.update(_ :+ "bob:compute") *> IO.pure("ok")
                         r <- bob.send(v).to(alice)
@@ -611,9 +611,9 @@ class LocalSuite extends CatsEffectSuite {
   // -- Par (parallel composition) --
 
   test("Par: runLocal returns both results") {
-    val left: Choreo[IO, Int @@ "alice"]    = alice.locally(IO.pure(1))
-    val right: Choreo[IO, String @@ "bob"]  = bob.locally(IO.pure("hello"))
-    val c = left |*| right
+    val left: Choreo[IO, Int @@ "alice"]   = alice.locally(IO.pure(1))
+    val right: Choreo[IO, String @@ "bob"] = bob.locally(IO.pure("hello"))
+    val c                                  = left |*| right
 
     c.runLocal.map { case (a, b) =>
       assertEquals(unwrap[alice.type](a), 1)
@@ -698,8 +698,8 @@ class LocalSuite extends CatsEffectSuite {
   }
 
   test("Par: Choreo.par is equivalent to |*| operator") {
-    val left: Choreo[IO, Int @@ "alice"]  = alice.locally(IO.pure(1))
-    val right: Choreo[IO, Int @@ "bob"]   = bob.locally(IO.pure(2))
+    val left: Choreo[IO, Int @@ "alice"] = alice.locally(IO.pure(1))
+    val right: Choreo[IO, Int @@ "bob"]  = bob.locally(IO.pure(2))
 
     val c1 = Choreo.par(left, right)
     val c2 = left |*| right
@@ -714,8 +714,8 @@ class LocalSuite extends CatsEffectSuite {
   }
 
   test("Par: followed by sequential steps") {
-    val left: Choreo[IO, Int @@ "alice"]    = alice.locally(IO.pure(10))
-    val right: Choreo[IO, String @@ "bob"]  = bob.locally(IO.pure("x"))
+    val left: Choreo[IO, Int @@ "alice"]   = alice.locally(IO.pure(10))
+    val right: Choreo[IO, String @@ "bob"] = bob.locally(IO.pure("x"))
 
     val c: Choreo[IO, String @@ "bob"] =
       for
@@ -775,5 +775,155 @@ class LocalSuite extends CatsEffectSuite {
         run.timeout(200.millis).attempt
       }
     yield assert(result.isLeft, "should have deadlocked (timed out)")
+  }
+
+  // -- AsyncComm (asynchronous communication) --
+
+  test("AsyncComm: runLocal returns awaitable value") {
+    val c: Choreo[IO, IO[Int] @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(42))
+        f <- alice.asyncSend(a).to(bob)
+      yield f
+
+    c.runLocal.flatMap { result =>
+      unwrap[bob.type](result).map { value =>
+        assertEquals(value, 42)
+      }
+    }
+  }
+
+  test("AsyncComm: runLocal value can be awaited in locally") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(42))
+        f <- alice.asyncSend(a).to(bob)
+        b <- bob.locally(f.!)
+      yield b
+
+    c.runLocal.map { result =>
+      assertEquals(unwrap[bob.type](result), 42)
+    }
+  }
+
+  test("AsyncComm: distributed, receiver gets value via deferred") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(99))
+        f <- alice.asyncSend(a).to(bob)
+        b <- bob.locally(f.!)
+      yield b
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), 99)
+  }
+
+  test("AsyncComm: sender proceeds before receiver awaits") {
+    for
+      aliceLog <- Ref.of[IO, List[String]](Nil)
+      bobLog   <- Ref.of[IO, List[String]](Nil)
+
+      choreo =
+        for
+          a <- alice.locally(aliceLog.update(_ :+ "alice:compute") *> IO.pure(1))
+          f <- alice.asyncSend(a).to(bob)
+          // Alice continues with more work after the async send
+          _ <- alice.locally(aliceLog.update(_ :+ "alice:after-send") *> IO.pure(()))
+          // Bob awaits the value
+          b <- bob.locally(bobLog.update(_ :+ "bob:await") *> f.!)
+        yield b
+
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- choreo.project(backend, alice).start
+      resultB  <- choreo.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+
+      aLog <- aliceLog.get
+      bLog <- bobLog.get
+    yield {
+      assertEquals(aLog, List("alice:compute", "alice:after-send"))
+      assertEquals(bLog, List("bob:await"))
+      assertEquals(unwrap[bob.type](resultB), 1)
+    }
+  }
+
+  test("AsyncComm: multiple async sends can be pipelined") {
+    val c: Choreo[IO, (Int @@ "bob", String @@ "bob")] =
+      for
+        a  <- alice.locally(IO.pure(42))
+        b  <- alice.locally(IO.pure("hello"))
+        fA <- alice.asyncSend(a).to(bob)
+        fB <- alice.asyncSend(b).to(bob)
+        rA <- bob.locally(fA.!)
+        rB <- bob.locally(fB.!)
+      yield (rA, rB)
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield {
+      assertEquals(unwrap[bob.type](resultB._1), 42)
+      assertEquals(unwrap[bob.type](resultB._2), "hello")
+    }
+  }
+
+  test("AsyncComm: mixed sync and async communication") {
+    val c: Choreo[IO, (Int @@ "bob", String @@ "bob")] =
+      for
+        a <- alice.locally(IO.pure(10))
+        b <- alice.send(a).to(bob)      // sync
+        c <- alice.locally(IO.pure("hi"))
+        f <- alice.asyncSend(c).to(bob) // async
+        d <- bob.locally(f.!)           // await async
+      yield (b, d)
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield {
+      assertEquals(unwrap[bob.type](resultB._1), 10)
+      assertEquals(unwrap[bob.type](resultB._2), "hi")
+    }
+  }
+
+  test("AsyncComm: 3 participants, uninvolved party is unaffected") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(7))
+        f <- alice.asyncSend(a).to(bob)
+        b <- bob.locally(f.!)
+      yield b
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      carolFib <- c.project(backend, carol).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+      _        <- carolFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), 7)
+  }
+
+  test("AsyncComm: deferred can be awaited multiple times") {
+    val c: Choreo[IO, (Int @@ "bob", Int @@ "bob")] =
+      for
+        a  <- alice.locally(IO.pure(5))
+        f  <- alice.asyncSend(a).to(bob)
+        b1 <- bob.locally(f.!)
+        b2 <- bob.locally(f.!)
+      yield (b1, b2)
+
+    c.runLocal.map { case (r1, r2) =>
+      assertEquals(unwrap[bob.type](r1), 5)
+      assertEquals(unwrap[bob.type](r2), 5)
+    }
   }
 }

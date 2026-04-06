@@ -1,5 +1,7 @@
 package choreo
 
+import scala.annotation.targetName
+
 import cats.Monad
 import cats.free.Free
 import cats.effect.IO
@@ -31,9 +33,13 @@ enum ChoreoSig[M[_], A]:
 
   case Comm[M[_], A, L0 <: Loc, L1 <: Loc](l0: L0, a: A @@ L0, l1: L1) extends ChoreoSig[M, A @@ L1]
 
+  case AsyncComm[M[_], A, L0 <: Loc, L1 <: Loc](l0: L0, a: A @@ L0, l1: L1)
+      extends ChoreoSig[M, M[A] @@ L1]
+
   case Cond[M[_], A, B, L <: Loc](l: L, a: A @@ L, f: A => Choreo[M, B]) extends ChoreoSig[M, B]
 
-  case Select[M[_], A, L <: Loc, Label](l: L, label: Label @@ L, branches: Map[Label, Choreo[M, A]]) extends ChoreoSig[M, A]
+  case Select[M[_], A, L <: Loc, Label](l: L, label: Label @@ L, branches: Map[Label, Choreo[M, A]])
+      extends ChoreoSig[M, A]
 
   case Par[M[_], A, B](left: Choreo[M, A], right: Choreo[M, B]) extends ChoreoSig[M, (A, B)]
 
@@ -42,6 +48,8 @@ extension [L <: Loc](l: L)
     Free.liftF(ChoreoSig.Local[M, A, l.type](l, un => m(using un)))
 
   def send[A](a: A @@ L): Sendable[A, L] = (src = l, value = a)
+
+  def asyncSend[A](a: A @@ L): AsyncSendable[A, L] = (src = l, value = a)
 
   def cond[M[_], A, B](a: A @@ L)(f: A => Choreo[M, B]): Choreo[M, B] =
     Free.liftF(ChoreoSig.Cond(l, a, f))
@@ -54,6 +62,13 @@ opaque type Sendable[A, L <: Loc] = (src: L, value: A @@ L)
 extension [A, Src <: Loc](s: Sendable[A, Src])
   def to[M[_], Dst <: Loc](dst: Dst): Choreo[M, A @@ dst.type] =
     Free.liftF(ChoreoSig.Comm(s.src, s.value, dst))
+
+opaque type AsyncSendable[A, L <: Loc] = (src: L, value: A @@ L)
+
+extension [A, Src <: Loc](s: AsyncSendable[A, Src])
+  @targetName("asyncTo")
+  def to[M[_], Dst <: Loc](dst: Dst): Choreo[M, M[A] @@ dst.type] =
+    Free.liftF(ChoreoSig.AsyncComm(s.src, s.value, dst))
 
 extension [M[_], A](c: Choreo[M, A])
   def runLocal(using M: Monad[M]): M[A] =
@@ -69,6 +84,9 @@ extension [M[_], A](c: Choreo[M, A])
 
         case ChoreoSig.Comm(l0, a, l1) =>
           M.pure(wrap(unwrap(a)).asInstanceOf)
+
+        case ChoreoSig.AsyncComm(l0, a, l1) =>
+          M.pure(wrap(M.pure(unwrap(a))).asInstanceOf)
 
         case ChoreoSig.Cond(l, a, f) =>
           f(unwrap(a)).runLocal

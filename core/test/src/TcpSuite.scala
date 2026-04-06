@@ -146,7 +146,7 @@ class TcpSuite extends CatsEffectSuite {
         decision <- buyer.locally(IO.pure(priceB.! > 0 && priceB.! <= budget))
 
         result <- buyer.select(decision)(
-                    true -> (for
+                    true  -> (for
                       dateS <- seller.locally(IO.pure(DeliveryDate(2026, 6, 15)))
                       dateB <- seller.send(dateS).to(buyer)
                     yield Some(dateB)),

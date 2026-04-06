@@ -116,7 +116,7 @@ class BooksellerSuite extends CatsEffectSuite {
           decision <- buyer.locally:
                         buyerLog.update(_ :+ "buyer:decision") *> IO.pure(true)
           result   <- buyer.select(decision)(
-                        true -> (for
+                        true  -> (for
                           dateS <- seller.locally:
                                      sellerLog.update(_ :+ "seller:date") *> IO.pure(
                                        Date(2026, 1, 1)

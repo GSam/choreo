@@ -9,10 +9,11 @@ import cats.arrow.FunctionK
 import choreo.utils.toFunctionK
 
 enum NetworkSig[M[_], A]:
-  case Run(ma: M[A])       extends NetworkSig[M, A]
-  case Send(a: A, to: Loc) extends NetworkSig[M, Unit]
-  case Recv(from: Loc)     extends NetworkSig[M, A]
-  case Broadcast(a: A)     extends NetworkSig[M, Unit]
+  case Run(ma: M[A])                                              extends NetworkSig[M, A]
+  case Send(a: A, to: Loc)                                        extends NetworkSig[M, Unit]
+  case Recv(from: Loc)                                            extends NetworkSig[M, A]
+  case AsyncRecv(from: Loc)                                       extends NetworkSig[M, A]
+  case Broadcast(a: A)                                            extends NetworkSig[M, Unit]
   case Par[M[_], A, B](left: Network[M, A], right: Network[M, B]) extends NetworkSig[M, (A, B)]
 
 type Network[M[_], A] = Free[[X] =>> NetworkSig[M, X], A]
@@ -30,6 +31,9 @@ object Network:
   def recv[M[_], A](from: Loc): Network[M, A] =
     Free.liftF(NetworkSig.Recv(from))
 
+  def asyncRecv[M[_], A](from: Loc): Network[M, A] =
+    Free.liftF(NetworkSig.AsyncRecv(from))
+
   def broadcast[M[_], A](a: A): Network[M, Unit] =
     Free.liftF(NetworkSig.Broadcast(a))
 
@@ -41,9 +45,8 @@ object Network:
 
 /** Placeholder value for locations not involved in an operation.
   *
-  * During endpoint projection, non-participating locations must still produce a
-  * value of the expected type to satisfy the Free monad. This value is never
-  * observed by user code.
+  * During endpoint projection, non-participating locations must still produce a value of the
+  * expected type to satisfy the Free monad. This value is never observed by user code.
   */
 private def uninhabited[A]: A = null.asInstanceOf[A]
 
@@ -65,6 +68,11 @@ object Endpoint:
           if at == src then Network.send(unwrap(a), dst) *> Network.empty.asInstanceOf
           else if at == dst then Network.recv(src).map(wrap.asInstanceOf)
           else Network.empty[M, a.Value, a.Location]
+
+        case ChoreoSig.AsyncComm(src, a, dst) =>
+          if at == src then Network.send(unwrap(a), dst) *> Network.empty.asInstanceOf
+          else if at == dst then Network.asyncRecv(src).map(wrap.asInstanceOf)
+          else Network.empty.asInstanceOf
 
         case ChoreoSig.Cond(loc, a, f) =>
           if at == loc then
@@ -98,8 +106,7 @@ object Endpoint:
             Network.recv[M, Any](loc).flatMap { key =>
               project(branches(key.asInstanceOf), at, locs)
             }
-          else
-            Free.pure(uninhabited[A])
+          else Free.pure(uninhabited[A])
 
         case ChoreoSig.Par(left, right) =>
           val locsLeft  = collectLocations(left, locs)
@@ -125,6 +132,9 @@ object Endpoint:
             Writer(Set[Loc](loc), At.empty.asInstanceOf[X])
 
           case ChoreoSig.Comm(src, _, dst) =>
+            Writer(Set[Loc](src, dst), At.empty.asInstanceOf[X])
+
+          case ChoreoSig.AsyncComm(src, _, dst) =>
             Writer(Set[Loc](src, dst), At.empty.asInstanceOf[X])
 
           case ChoreoSig.Cond(loc, a, f) =>

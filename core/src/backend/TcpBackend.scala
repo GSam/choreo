@@ -46,6 +46,13 @@ class TcpBackend[M[_]: Async] private (
           val inbox = inboxes((from = from, to = at))
           inbox.take.map(_.asInstanceOf[A])
 
+        case NetworkSig.AsyncRecv(from) =>
+          val inbox = inboxes((from = from, to = at))
+          (for
+            d <- Deferred[M, Any]
+            _ <- Async[M].start(inbox.take.flatMap(v => d.complete(v).void))
+          yield d.get).asInstanceOf[M[A]]
+
         case NetworkSig.Broadcast(a) =>
           locs
             .filter(_ != at)

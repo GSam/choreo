@@ -1,12 +1,7 @@
 package choreo
 package backend
 
-import java.io.{
-  ByteArrayInputStream,
-  ByteArrayOutputStream,
-  ObjectInputStream,
-  ObjectOutputStream
-}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectInputStream, ObjectOutputStream}
 
 /** Encodes and decodes values for transmission over the wire. */
 trait WireCodec:
