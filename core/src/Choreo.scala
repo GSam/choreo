@@ -26,6 +26,8 @@ enum ChoreoSig[M[_], A]:
 
   case Cond[M[_], A, B, L <: Loc](l: L, a: A @@ L, f: A => Choreo[M, B]) extends ChoreoSig[M, B]
 
+  case Select[M[_], A, L <: Loc, Label](l: L, label: Label @@ L, branches: Map[Label, Choreo[M, A]]) extends ChoreoSig[M, A]
+
 extension [L <: Loc](l: L)
   def locally[M[_], A](m: Unwrap[l.type] ?=> M[A]): Choreo[M, A @@ l.type] =
     Free.liftF(ChoreoSig.Local[M, A, l.type](l, un => m(using un)))
@@ -34,6 +36,9 @@ extension [L <: Loc](l: L)
 
   def cond[M[_], A, B](a: A @@ L)(f: A => Choreo[M, B]): Choreo[M, B] =
     Free.liftF(ChoreoSig.Cond(l, a, f))
+
+  def select[M[_], A, Label](label: Label @@ L)(branches: (Label, Choreo[M, A])*): Choreo[M, A] =
+    Free.liftF(ChoreoSig.Select(l, label, branches.toMap))
 
 opaque type Sendable[A, L <: Loc] = (src: L, value: A @@ L)
 
@@ -58,3 +63,6 @@ extension [M[_], A](c: Choreo[M, A])
 
         case ChoreoSig.Cond(l, a, f) =>
           f(unwrap(a)).runLocal
+
+        case ChoreoSig.Select(l, label, branches) =>
+          branches(unwrap(label)).runLocal

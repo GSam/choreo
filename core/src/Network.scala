@@ -71,6 +71,24 @@ object Endpoint:
               case value       => project(f(value.asInstanceOf), at, locs)
             }
 
+        case ChoreoSig.Select(loc, label, branches) =>
+          val allInvolved = branches.values.foldLeft(Set.empty[Loc]) { (acc, b) =>
+            acc ++ collectLocations(b, locs)
+          }
+          if at == loc then
+            val key    = unwrap(label)
+            val branch = branches(key)
+            val sends  = (allInvolved - loc).toList.traverse_ { l =>
+              Network.send[M, Any](key, l)
+            }
+            sends *> project(branch, at, locs)
+          else if allInvolved.contains(at) then
+            Network.recv[M, Any](loc).flatMap { key =>
+              project(branches(key.asInstanceOf), at, locs)
+            }
+          else
+            Free.pure(null.asInstanceOf[A])
+
   private[choreo] def collectLocations[M[_], A](
       c: Choreo[M, A],
       allLocs: Set[Loc]
@@ -90,6 +108,12 @@ object Endpoint:
             val innerLocs = a match
               case At.Wrap(v) => collectLocations(f(v), allLocs)
               case _          => allLocs
+            Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
+
+          case ChoreoSig.Select(loc, _, branches) =>
+            val innerLocs = branches.values.foldLeft(Set.empty[Loc]) { (acc, b) =>
+              acc ++ collectLocations(b, allLocs)
+            }
             Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
 
     c.foldMap(collector.toFunctionK).written

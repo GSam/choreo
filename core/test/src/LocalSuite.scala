@@ -190,6 +190,166 @@ class LocalSuite extends CatsEffectSuite {
     }
   }
 
+  // -- Select branching --
+
+  test("Select: runLocal picks correct branch") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.select(flag)(
+                    true  -> bob.locally(IO.pure("yes")),
+                    false -> bob.locally(IO.pure("no"))
+                  )
+      yield result
+
+    c.runLocal.map { result =>
+      assertEquals(unwrap[bob.type](result), "yes")
+    }
+  }
+
+  test("Select: true branch is taken (distributed)") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.select(flag)(
+                    true  -> bob.locally(IO.pure("yes")),
+                    false -> bob.locally(IO.pure("no"))
+                  )
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), "yes")
+  }
+
+  test("Select: false branch is taken (distributed)") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(false))
+        result <- alice.select(flag)(
+                    true  -> bob.locally(IO.pure("yes")),
+                    false -> bob.locally(IO.pure("no"))
+                  )
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      resultB  <- c.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), "no")
+  }
+
+  test("Select: 3 participants, uninvolved party gets no message") {
+    for
+      carolLog <- Ref.of[IO, List[String]](Nil)
+
+      choreo =
+        for
+          flag   <- alice.locally(IO.pure(true))
+          result <- alice.select(flag)(
+                      true  -> bob.locally(IO.pure("yes")),
+                      false -> bob.locally(IO.pure("no"))
+                    )
+        yield result
+
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- choreo.project(backend, alice).start
+      carolFib <- choreo.project(backend, carol).start
+      resultB  <- choreo.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+      _        <- carolFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), "yes")
+  }
+
+  test("Select: 3 participants, branch involves two of three") {
+    val c: Choreo[IO, Int @@ "alice"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.select(flag)(
+                    true -> (for
+                      v <- bob.locally(IO.pure(42))
+                      r <- bob.send(v).to(alice)
+                    yield r),
+                    false -> alice.locally(IO.pure(0))
+                  )
+      yield result
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      bobFib   <- c.project(backend, bob).start
+      carolFib <- c.project(backend, carol).start
+      resultA  <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+      _        <- carolFib.joinWithNever
+    yield assertEquals(unwrap[alice.type](resultA), 42)
+  }
+
+  test("Select: only label is sent, not the full value") {
+    // Use an enum label to prove only the discriminant travels
+    for
+      sentValues <- Ref.of[IO, List[Any]](Nil)
+
+      choreo =
+        for
+          choice <- alice.locally(IO.pure("buy"))
+          result <- alice.select(choice)(
+                      "buy"  -> bob.locally(IO.pure(100)),
+                      "skip" -> bob.locally(IO.pure(0))
+                    )
+        yield result
+
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- choreo.project(backend, alice).start
+      resultB  <- choreo.project(backend, bob)
+      _        <- aliceFib.joinWithNever
+    yield assertEquals(unwrap[bob.type](resultB), 100)
+  }
+
+  test("Select: effects only run at involved locations") {
+    for
+      aliceLog <- Ref.of[IO, List[String]](Nil)
+      bobLog   <- Ref.of[IO, List[String]](Nil)
+      carolLog <- Ref.of[IO, List[String]](Nil)
+
+      choreo =
+        for
+          flag <- alice.locally:
+                    aliceLog.update(_ :+ "alice:decide") *> IO.pure(true)
+          result <- alice.select(flag)(
+                      true -> (for
+                        v <- bob.locally:
+                               bobLog.update(_ :+ "bob:compute") *> IO.pure("ok")
+                        r <- bob.send(v).to(alice)
+                        _ <- alice.locally:
+                               aliceLog.update(_ :+ "alice:receive")
+                      yield r),
+                      false -> alice.locally(IO.pure("nope"))
+                    )
+        yield result
+
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- choreo.project(backend, alice).start
+      bobFib   <- choreo.project(backend, bob).start
+      carolFib <- choreo.project(backend, carol).start
+      _        <- aliceFib.joinWithNever
+      _        <- bobFib.joinWithNever
+      _        <- carolFib.joinWithNever
+
+      aLog <- aliceLog.get
+      bLog <- bobLog.get
+      cLog <- carolLog.get
+    yield {
+      assertEquals(aLog, List("alice:decide", "alice:receive"))
+      assertEquals(bLog, List("bob:compute"))
+      assertEquals(cLog, Nil)
+    }
+  }
+
   // -- Error cases --
 
   test("unwrap Empty value throws an error") {

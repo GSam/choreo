@@ -53,16 +53,15 @@ def protocol: Choreo[IO, Option[Date @@ "buyer"]] =
                     IO.print("Do you want to buy it? [y/n] ") *>
                     IO.readLine.map(_ == "y")
 
-    deliveryDate <- buyer.cond(decision):
-                      case true =>
-                        for
-                          deliveryDateS <- seller.locally(IO.pure(Date(2024, 12, 24)))
-                          deliveryDateB <- seller.send(deliveryDateS).to(buyer)
+    deliveryDate <- buyer.select(decision)(
+                      true -> (for
+                        deliveryDateS <- seller.locally(IO.pure(Date(2024, 12, 24)))
+                        deliveryDateB <- seller.send(deliveryDateS).to(buyer)
 
-                          _ <- buyer.locally:
-                                 IO.println(s"Book will be delivered on ${deliveryDateB.!}")
-                        yield Some(deliveryDateB)
+                        _ <- buyer.locally:
+                               IO.println(s"Book will be delivered on ${deliveryDateB.!}")
+                      yield Some(deliveryDateB)),
 
-                      case false =>
-                        buyer.locally(IO.println("Ok, bye!")) *> Choreo.pure(None)
+                      false -> (buyer.locally(IO.println("Ok, bye!")) *> Choreo.pure(None))
+                    )
   yield deliveryDate

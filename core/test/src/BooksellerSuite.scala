@@ -36,15 +36,14 @@ class BooksellerSuite extends CatsEffectSuite {
       decision <- buyer.locally:
                     IO.pure(priceB.! > 0 && priceB.! <= budget)
 
-      result <- buyer.cond(decision):
-                  case true =>
-                    for
-                      dateS <- seller.locally(IO.pure(Date(2026, 6, 15)))
-                      dateB <- seller.send(dateS).to(buyer)
-                    yield Some(dateB)
+      result <- buyer.select(decision)(
+                  true -> (for
+                    dateS <- seller.locally(IO.pure(Date(2026, 6, 15)))
+                    dateB <- seller.send(dateS).to(buyer)
+                  yield Some(dateB)),
 
-                  case false =>
-                    Choreo.pure(None)
+                  false -> Choreo.pure(None)
+                )
     yield result
 
   test("runLocal: buyer purchases affordable book") {
@@ -116,17 +115,16 @@ class BooksellerSuite extends CatsEffectSuite {
           priceB   <- seller.send(priceS).to(buyer)
           decision <- buyer.locally:
                         buyerLog.update(_ :+ "buyer:decision") *> IO.pure(true)
-          result   <- buyer.cond(decision):
-                        case true  =>
-                          for
-                            dateS <- seller.locally:
-                                       sellerLog.update(_ :+ "seller:date") *> IO.pure(
-                                         Date(2026, 1, 1)
-                                       )
-                            dateB <- seller.send(dateS).to(buyer)
-                          yield Some(dateB)
-                        case false =>
-                          Choreo.pure(None)
+          result   <- buyer.select(decision)(
+                        true -> (for
+                          dateS <- seller.locally:
+                                     sellerLog.update(_ :+ "seller:date") *> IO.pure(
+                                       Date(2026, 1, 1)
+                                     )
+                          dateB <- seller.send(dateS).to(buyer)
+                        yield Some(dateB)),
+                        false -> Choreo.pure(None)
+                      )
         yield result
 
       backend <- Backend.local[IO](List(buyer, seller))
