@@ -6,8 +6,9 @@ import cats.syntax.all.*
 import cats.effect.unsafe.implicits.global
 
 val allExamples = Map(
-  "book" -> bookseller.main,
-  "kv"   -> kv.main
+  "book"  -> bookseller.main,
+  "kv"    -> kv.main,
+  "twopc" -> twopc.main
 )
 
 def choose: IO[Unit] =
