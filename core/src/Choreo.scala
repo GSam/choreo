@@ -19,6 +19,13 @@ extension [M[_], A](c: Choreo[M, A])
 object Choreo:
   def pure[M[_], A](a: A): Choreo[M, A] = Free.pure(a)
 
+  def par[M[_], A, B](left: Choreo[M, A], right: Choreo[M, B]): Choreo[M, (A, B)] =
+    Free.liftF(ChoreoSig.Par(left, right))
+
+extension [M[_], A](self: Choreo[M, A])
+  infix def |*|[B](other: Choreo[M, B]): Choreo[M, (A, B)] =
+    Choreo.par(self, other)
+
 enum ChoreoSig[M[_], A]:
   case Local[M[_], A, L <: Loc](l: L, m: Unwrap[L] => M[A]) extends ChoreoSig[M, A @@ L]
 
@@ -27,6 +34,8 @@ enum ChoreoSig[M[_], A]:
   case Cond[M[_], A, B, L <: Loc](l: L, a: A @@ L, f: A => Choreo[M, B]) extends ChoreoSig[M, B]
 
   case Select[M[_], A, L <: Loc, Label](l: L, label: Label @@ L, branches: Map[Label, Choreo[M, A]]) extends ChoreoSig[M, A]
+
+  case Par[M[_], A, B](left: Choreo[M, A], right: Choreo[M, B]) extends ChoreoSig[M, (A, B)]
 
 extension [L <: Loc](l: L)
   def locally[M[_], A](m: Unwrap[l.type] ?=> M[A]): Choreo[M, A @@ l.type] =
@@ -66,3 +75,9 @@ extension [M[_], A](c: Choreo[M, A])
 
         case ChoreoSig.Select(l, label, branches) =>
           branches(unwrap(label)).runLocal
+
+        case ChoreoSig.Par(left, right) =>
+          for
+            a <- left.runLocal
+            b <- right.runLocal
+          yield (a, b)

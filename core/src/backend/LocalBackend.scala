@@ -1,7 +1,6 @@
 package choreo
 package backend
 
-import cats.Monad
 import cats.effect.std.Queue
 import cats.effect.kernel.Concurrent
 import cats.syntax.all.*
@@ -12,13 +11,13 @@ class LocalBackend[M[_]](inboxes: Map[Channel, Queue[M, Any]], val locs: Seq[Loc
 
   def runNetwork[A](at: Loc)(
       network: Network[M, A]
-  )(using M: Monad[M]): M[A] =
+  )(using M: Concurrent[M]): M[A] =
     network.foldMap(run(at, inboxes).toFunctionK)
 
   private[choreo] def run(
       at: Loc,
       inboxes: Map[Channel, Queue[M, Any]]
-  )(using M: Monad[M]): [A] => NetworkSig[M, A] => M[A] = [A] =>
+  )(using M: Concurrent[M]): [A] => NetworkSig[M, A] => M[A] = [A] =>
     (na: NetworkSig[M, A]) =>
       na match
         case NetworkSig.Run(ma) =>
@@ -39,6 +38,11 @@ class LocalBackend[M[_]](inboxes: Map[Channel, Queue[M, Any]], val locs: Seq[Loc
               run(at, inboxes)(NetworkSig.Send(a, to))
             }
 
+        case NetworkSig.Par(left, right) =>
+          val leftM  = left.foldMap(run(at, inboxes).toFunctionK)
+          val rightM = right.foldMap(run(at, inboxes).toFunctionK)
+          M.both(leftM, rightM).asInstanceOf[M[A]]
+
 object LocalBackend:
   def apply[M[_]: Concurrent](locs: Seq[Loc]): M[LocalBackend[M]] =
     for inboxes <- makeInboxes(locs)
@@ -51,7 +55,7 @@ object LocalBackend:
     for queues <- channels.traverse(_ => Queue.unbounded[M, Any])
     yield channels.zip(queues).toMap
 
-  given localBackend[M[_]: Monad]: Backend[LocalBackend[M], M] with
+  given localBackend[M[_]: Concurrent]: Backend[LocalBackend[M], M] with
     extension (b: LocalBackend[M])
       def runNetwork[A](at: Loc)(network: Network[M, A]): M[A] =
         b.runNetwork(at)(network)

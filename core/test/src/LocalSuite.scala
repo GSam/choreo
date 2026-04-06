@@ -608,6 +608,127 @@ class LocalSuite extends CatsEffectSuite {
 
   // -- Deadlock --
 
+  // -- Par (parallel composition) --
+
+  test("Par: runLocal returns both results") {
+    val left: Choreo[IO, Int @@ "alice"]    = alice.locally(IO.pure(1))
+    val right: Choreo[IO, String @@ "bob"]  = bob.locally(IO.pure("hello"))
+    val c = left |*| right
+
+    c.runLocal.map { case (a, b) =>
+      assertEquals(unwrap[alice.type](a), 1)
+      assertEquals(unwrap[bob.type](b), "hello")
+    }
+  }
+
+  test("Par: distributed, disjoint locations run concurrently") {
+    val left: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(42))
+        b <- alice.send(a).to(bob)
+      yield b
+
+    val right: Choreo[IO, String @@ "carol"] =
+      carol.locally(IO.pure("done"))
+
+    val c = left |*| right
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      bobFib   <- c.project(backend, bob).start
+      carolRes <- c.project(backend, carol)
+      aliceRes <- aliceFib.joinWithNever
+      bobRes   <- bobFib.joinWithNever
+    yield {
+      assertEquals(unwrap[bob.type](bobRes._1), 42)
+      assertEquals(unwrap[carol.type](carolRes._2), "done")
+    }
+  }
+
+  test("Par: effects in both branches run at correct locations") {
+    for
+      aliceLog <- Ref.of[IO, List[String]](Nil)
+      bobLog   <- Ref.of[IO, List[String]](Nil)
+
+      left  = alice.locally(aliceLog.update(_ :+ "left") *> IO.pure(1))
+      right = bob.locally(bobLog.update(_ :+ "right") *> IO.pure(2))
+      c     = left |*| right
+
+      backend  <- Backend.local[IO](List(alice, bob))
+      aliceFib <- c.project(backend, alice).start
+      bobRes   <- c.project(backend, bob)
+      aliceRes <- aliceFib.joinWithNever
+
+      aLog <- aliceLog.get
+      bLog <- bobLog.get
+    yield {
+      assertEquals(aLog, List("left"))
+      assertEquals(bLog, List("right"))
+    }
+  }
+
+  test("Par: independent communication channels don't interfere") {
+    // left: alice -> bob, right: carol -> alice (different channels)
+    val left: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(10))
+        b <- alice.send(a).to(bob)
+      yield b
+
+    val right: Choreo[IO, String @@ "alice"] =
+      for
+        c <- carol.locally(IO.pure("hi"))
+        a <- carol.send(c).to(alice)
+      yield a
+
+    val c = left |*| right
+
+    for
+      backend  <- Backend.local[IO](List(alice, bob, carol))
+      aliceFib <- c.project(backend, alice).start
+      bobFib   <- c.project(backend, bob).start
+      carolRes <- c.project(backend, carol)
+      aliceRes <- aliceFib.joinWithNever
+      bobRes   <- bobFib.joinWithNever
+    yield {
+      assertEquals(unwrap[bob.type](bobRes._1), 10)
+      assertEquals(unwrap[alice.type](aliceRes._2), "hi")
+    }
+  }
+
+  test("Par: Choreo.par is equivalent to |*| operator") {
+    val left: Choreo[IO, Int @@ "alice"]  = alice.locally(IO.pure(1))
+    val right: Choreo[IO, Int @@ "bob"]   = bob.locally(IO.pure(2))
+
+    val c1 = Choreo.par(left, right)
+    val c2 = left |*| right
+
+    for
+      r1 <- c1.runLocal
+      r2 <- c2.runLocal
+    yield {
+      assertEquals(unwrap[alice.type](r1._1), unwrap[alice.type](r2._1))
+      assertEquals(unwrap[bob.type](r1._2), unwrap[bob.type](r2._2))
+    }
+  }
+
+  test("Par: followed by sequential steps") {
+    val left: Choreo[IO, Int @@ "alice"]    = alice.locally(IO.pure(10))
+    val right: Choreo[IO, String @@ "bob"]  = bob.locally(IO.pure("x"))
+
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        (a, b) <- left |*| right
+        aB     <- alice.send(a).to(bob)
+        result <- bob.locally(IO.pure(s"${b.!} repeated ${aB.!} times"))
+      yield result
+
+    c.runLocal.map { result =>
+      assertEquals(unwrap[bob.type](result), "x repeated 10 times")
+    }
+  }
+
   test("distributed: mutual recv deadlocks (detected via timeout)") {
     // Both alice and bob try to receive from each other simultaneously
     // without sending first — this is a deadlock

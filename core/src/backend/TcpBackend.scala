@@ -1,7 +1,6 @@
 package choreo
 package backend
 
-import cats.Monad
 import cats.effect.{Async, Deferred, Resource}
 import cats.effect.std.Queue
 import cats.effect.syntax.all.*
@@ -21,12 +20,12 @@ class TcpBackend[M[_]: Async] private (
 
   def runNetwork[A](at: Loc)(
       network: Network[M, A]
-  )(using M: Monad[M]): M[A] =
+  ): M[A] =
     network.foldMap(run(at).toFunctionK)
 
   private def run(
       at: Loc
-  )(using M: Monad[M]): [A] => NetworkSig[M, A] => M[A] = [A] =>
+  ): [A] => NetworkSig[M, A] => M[A] = [A] =>
     (na: NetworkSig[M, A]) =>
       na match
         case NetworkSig.Run(ma) =>
@@ -53,6 +52,11 @@ class TcpBackend[M[_]: Async] private (
             .traverse_ { to =>
               run(at)(NetworkSig.Send(a, to))
             }
+
+        case NetworkSig.Par(left, right) =>
+          val leftM  = left.foldMap(run(at).toFunctionK)
+          val rightM = right.foldMap(run(at).toFunctionK)
+          Async[M].both(leftM, rightM).asInstanceOf[M[A]]
 
 object TcpBackend:
 

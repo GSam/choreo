@@ -13,6 +13,7 @@ enum NetworkSig[M[_], A]:
   case Send(a: A, to: Loc) extends NetworkSig[M, Unit]
   case Recv(from: Loc)     extends NetworkSig[M, A]
   case Broadcast(a: A)     extends NetworkSig[M, Unit]
+  case Par[M[_], A, B](left: Network[M, A], right: Network[M, B]) extends NetworkSig[M, (A, B)]
 
 type Network[M[_], A] = Free[[X] =>> NetworkSig[M, X], A]
 
@@ -31,6 +32,9 @@ object Network:
 
   def broadcast[M[_], A](a: A): Network[M, Unit] =
     Free.liftF(NetworkSig.Broadcast(a))
+
+  def par[M[_], A, B](left: Network[M, A], right: Network[M, B]): Network[M, (A, B)] =
+    Free.liftF(NetworkSig.Par(left, right))
 
   def empty[M[_], A, L <: Loc]: Network[M, A @@ L] =
     Network.pure(At.empty[A, L])
@@ -89,6 +93,17 @@ object Endpoint:
           else
             Free.pure(null.asInstanceOf[A])
 
+        case ChoreoSig.Par(left, right) =>
+          val locsLeft  = collectLocations(left, locs)
+          val locsRight = collectLocations(right, locs)
+          val leftNet   =
+            if locsLeft.contains(at) then project(left, at, locsLeft)
+            else Free.pure(null.asInstanceOf)
+          val rightNet  =
+            if locsRight.contains(at) then project(right, at, locsRight)
+            else Free.pure(null.asInstanceOf)
+          Network.par(leftNet, rightNet).asInstanceOf[Network[M, A]]
+
   private[choreo] def collectLocations[M[_], A](
       c: Choreo[M, A],
       allLocs: Set[Loc]
@@ -115,5 +130,9 @@ object Endpoint:
               acc ++ collectLocations(b, allLocs)
             }
             Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
+
+          case ChoreoSig.Par(left, right) =>
+            val locs = collectLocations(left, allLocs) ++ collectLocations(right, allLocs)
+            Writer(locs, null.asInstanceOf[X])
 
     c.foldMap(collector.toFunctionK).written
