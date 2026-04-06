@@ -1,5 +1,7 @@
 //| mill-version: 1.1.5
-//| mvnDeps: ["com.lihaoyi::mill-contrib-scoverage:$MILL_VERSION"]
+//| mvnDeps:
+//| - com.lihaoyi::mill-contrib-scoverage:$MILL_VERSION
+
 package build
 
 import mill.*, scalalib.*, scalalib.publish.*
@@ -20,7 +22,7 @@ trait ChoreoModule extends ScalaModule {
 
 object core extends ChoreoModule with PublishModule with ScoverageModule {
   def scoverageVersion = "2.1.1"
-  def artifactName = "choreo"
+  def artifactName     = "choreo"
 
   def publishVersion = versions.choreo
 
