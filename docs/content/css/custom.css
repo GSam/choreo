@@ -1,0 +1,72 @@
+/* Obsidian Rose — Custom CSS overrides for Helium */
+
+:root {
+  color-scheme: dark;
+}
+
+/* Code blocks */
+pre.laika-code {
+  background-color: #0b0b10;
+  border: 1px solid #2a2a35;
+  border-radius: 8px;
+}
+
+/* Inline code */
+.text-content code {
+  background-color: #1a1a24;
+  color: #f472b6;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(244, 114, 182, 0.3);
+}
+
+/* Scrollbar (webkit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111118;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a35;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a45;
+}
+
+/* Tables */
+table thead {
+  background-color: rgba(244, 114, 182, 0.1);
+}
+
+table th {
+  border-bottom-color: #f472b6;
+}
+
+table td {
+  border-bottom-color: #2a2a35;
+}
+
+/* Landing page teaser cards */
+.teasers .teaser:hover {
+  box-shadow: 0 0 20px rgba(244, 114, 182, 0.15);
+}
+
+/* Navigation active state */
+#sidebar .active {
+  color: #f472b6;
+}
+
+/* Links */
+.text-content a:hover {
+  text-decoration-color: #c4b5fd;
+}
