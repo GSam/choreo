@@ -39,6 +39,14 @@ object Network:
   def empty[M[_], A, L <: Loc]: Network[M, A @@ L] =
     Network.pure(At.empty[A, L])
 
+/** Placeholder value for locations not involved in an operation.
+  *
+  * During endpoint projection, non-participating locations must still produce a
+  * value of the expected type to satisfy the Free monad. This value is never
+  * observed by user code.
+  */
+private def uninhabited[A]: A = null.asInstanceOf[A]
+
 object Endpoint:
   def project[M[_], A](c: Choreo[M, A], at: Loc, locs: Set[Loc]): Network[M, A] =
     c.foldMap(epp[M](at, locs).toFunctionK)
@@ -71,7 +79,7 @@ object Endpoint:
           else
             Network.recv[M, Any](loc).flatMap {
               case Some(value) => project(f(value.asInstanceOf), at, locs)
-              case None        => Free.pure(null.asInstanceOf[A])
+              case None        => Free.pure(uninhabited[A])
               case value       => project(f(value.asInstanceOf), at, locs)
             }
 
@@ -91,17 +99,17 @@ object Endpoint:
               project(branches(key.asInstanceOf), at, locs)
             }
           else
-            Free.pure(null.asInstanceOf[A])
+            Free.pure(uninhabited[A])
 
         case ChoreoSig.Par(left, right) =>
           val locsLeft  = collectLocations(left, locs)
           val locsRight = collectLocations(right, locs)
           val leftNet   =
             if locsLeft.contains(at) then project(left, at, locsLeft)
-            else Free.pure(null.asInstanceOf)
+            else Free.pure(uninhabited)
           val rightNet  =
             if locsRight.contains(at) then project(right, at, locsRight)
-            else Free.pure(null.asInstanceOf)
+            else Free.pure(uninhabited)
           Network.par(leftNet, rightNet).asInstanceOf[Network[M, A]]
 
   private[choreo] def collectLocations[M[_], A](
@@ -123,16 +131,16 @@ object Endpoint:
             val innerLocs = a match
               case At.Wrap(v) => collectLocations(f(v), allLocs)
               case _          => allLocs
-            Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
+            Writer(Set[Loc](loc) ++ innerLocs, uninhabited[X])
 
           case ChoreoSig.Select(loc, _, branches) =>
             val innerLocs = branches.values.foldLeft(Set.empty[Loc]) { (acc, b) =>
               acc ++ collectLocations(b, allLocs)
             }
-            Writer(Set[Loc](loc) ++ innerLocs, null.asInstanceOf[X])
+            Writer(Set[Loc](loc) ++ innerLocs, uninhabited[X])
 
           case ChoreoSig.Par(left, right) =>
             val locs = collectLocations(left, allLocs) ++ collectLocations(right, allLocs)
-            Writer(locs, null.asInstanceOf[X])
+            Writer(locs, uninhabited[X])
 
     c.foldMap(collector.toFunctionK).written
