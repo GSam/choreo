@@ -1,0 +1,145 @@
+/* Ember & Slate palette for Choreo docs */
+
+:root {
+  font-size: 15px;
+
+  /* Accent colors — orange */
+  --sl-color-accent-low: #2a190a;
+  --sl-color-accent: #f97316;
+  --sl-color-accent-high: #fdba74;
+
+  /* Text colors */
+  --sl-color-white: #e0dce4;
+  --sl-color-gray-1: #c4bfcc;
+  --sl-color-gray-2: #9b95a5;
+  --sl-color-gray-3: #6b6575;
+  --sl-color-gray-4: #4a4560;
+  --sl-color-gray-5: #2d2a3a;
+  --sl-color-gray-6: #1a1a2e;
+  --sl-color-black: #12121f;
+
+  /* Override hero gradient to match dark slate bg */
+  --sl-color-bg: #12121f;
+  --sl-color-bg-nav: #1a1a2ecc;
+  --sl-color-bg-sidebar: #16162a;
+  --sl-color-hairline-light: #2d2a3a;
+  --sl-color-hairline-shade: #12121f;
+}
+
+/* Light mode overrides — keep it dark-first, but provide a readable light mode */
+:root[data-theme="light"] {
+  --sl-color-accent-low: #fff7ed;
+  --sl-color-accent: #ea580c;
+  --sl-color-accent-high: #7c2d12;
+
+  --sl-color-white: #1a1a2e;
+  --sl-color-gray-1: #2d2a3a;
+  --sl-color-gray-2: #4a4560;
+  --sl-color-gray-3: #6b6575;
+  --sl-color-gray-4: #9b95a5;
+  --sl-color-gray-5: #e0dce4;
+  --sl-color-gray-6: #f0edf4;
+  --sl-color-black: #faf8fc;
+
+  --sl-color-bg: #faf8fc;
+  --sl-color-bg-nav: #f0edf4cc;
+  --sl-color-bg-sidebar: #f5f3f8;
+  --sl-color-hairline-light: #e0dce4;
+  --sl-color-hairline-shade: #c4bfcc;
+}
+
+/* Rounder corners globally */
+.expressive-code .frame {
+  border-radius: 0.75rem !important;
+}
+
+.expressive-code pre {
+  border: 1px solid var(--sl-color-hairline-light) !important;
+  border-radius: 0.75rem !important;
+}
+
+.card {
+  border-radius: 0.75rem;
+}
+
+:not(pre) > code {
+  background: var(--sl-color-gray-5);
+  color: var(--sl-color-accent-high);
+  border-radius: 0.25rem;
+}
+
+/* ── Splash / Hero page ────────────────────────────────── */
+
+/* Remove the content-width cap on the homepage so everything can center freely */
+[data-has-hero] .sl-container {
+  max-width: none;
+}
+
+/* Force hero to single-column centered layout (no image) */
+[data-has-hero] .hero {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  grid-template-columns: none !important;
+  background:
+    radial-gradient(ellipse at 50% 0%, #f9731612 0%, transparent 60%),
+    var(--sl-color-black);
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  padding-block: clamp(3rem, 8vmin, 6rem);
+}
+
+[data-has-hero] .hero .stack {
+  text-align: center !important;
+}
+
+[data-has-hero] .hero .copy {
+  align-items: center !important;
+}
+
+[data-has-hero] .hero .actions {
+  justify-content: center !important;
+}
+
+/* Tagline emphasis */
+[data-has-hero] .hero .tagline {
+  color: var(--sl-color-gray-1);
+  font-size: var(--sl-text-xl);
+}
+
+/* Feature cards */
+[data-has-hero] .card {
+  background: var(--sl-color-gray-6);
+  border: 1px solid var(--sl-color-hairline-light);
+}
+
+[data-has-hero] .card .title {
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+[data-has-hero] .card:hover {
+  border-color: var(--sl-color-accent);
+}
+
+/* Center all content below the hero */
+[data-has-hero] .sl-markdown-content {
+  max-width: 50rem;
+  margin-inline: auto;
+  text-align: center;
+}
+
+[data-has-hero] .sl-markdown-content :where(h2) {
+  margin-block-start: 3rem;
+}
+
+[data-has-hero] .sl-markdown-content > :where(p) {
+  max-width: 65ch;
+  margin-inline: auto;
+}
+
+/* Code blocks: left-aligned text, constrained width, centered on page */
+[data-has-hero] .sl-markdown-content .expressive-code {
+  text-align: left;
+  max-width: 40rem;
+  margin-inline: auto;
+}

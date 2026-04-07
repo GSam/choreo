@@ -1,0 +1,75 @@
+---
+title: Choreo
+description: Choreographic Programming for Scala 3
+template: splash
+hero:
+  tagline: Write one global protocol. Get correct distributed programs for free.
+  actions:
+    - text: Get Started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/romac/choreo
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Type-Safe Ownership" icon="approve-check">
+    Values are tagged with their owning location at the type level. The compiler prevents unauthorized access, no runtime checks needed.
+  </Card>
+  <Card title="Deadlock-Free by Construction" icon="rocket">
+    If your choreography compiles, the distributed system is guaranteed free of communication deadlocks. Correctness comes from the type system, not testing.
+  </Card>
+  <Card title="Automatic Endpoint Projection" icon="setting">
+    Write the protocol once as a global description. Each participant's network code is derived automatically via endpoint projection.
+  </Card>
+  <Card title="Scala 3 & Cats Effect" icon="seti:scala">
+    Built on Scala 3's singleton types and for-comprehensions. Integrates naturally with cats-effect for effectful, concurrent execution.
+  </Card>
+</CardGrid>
+
+## A taste of Choreo
+
+**1. Define locations:** each participant is a singleton string type:
+
+```scala
+import choreo.*, choreo.backend.*
+import cats.effect.IO, cats.syntax.all.*
+
+val alice: "alice" = "alice"
+val bob: "bob" = "bob"
+```
+
+**2. Write the choreography:** one global protocol, all participants in a single description:
+
+```scala
+def greeting: Choreo[IO, Unit] =
+  for
+    msgA <- alice.locally(IO.pure("Hello from Alice!"))
+    msgB <- alice.send(msgA).to(bob)
+    _    <- bob.locally(IO.println(s"Bob received: ${msgB.!}"))
+  yield ()
+```
+
+**3. Run it:** endpoint projection compiles the global protocol into per-participant network code.  
+Run in-process for testing, or over TCP for real deployment:
+
+```scala
+// In-memory — both participants in a single process
+for
+  backend  <- Backend.local(List(alice, bob))
+  aliceIO   = greeting.project(backend, alice)
+  bobIO     = greeting.project(backend, bob)
+  _        <- (aliceIO, bobIO).parTupled
+yield ()
+
+// Over TCP — each participant on its own connection
+TcpBackend.local[IO](List(alice, bob)).use: backend =>
+  val aliceIO = greeting.project(backend, alice)
+  val bobIO   = greeting.project(backend, bob)
+  (aliceIO, bobIO).parTupled.void
+```

@@ -1,0 +1,120 @@
+---
+title: Getting Started
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide walks you through adding Choreo to your project and writing your first choreography.
+
+## Installation
+
+Choreo is built for Scala 3 and uses [cats-effect](https://typelevel.org/cats-effect/) for effectful computation.
+
+Add the following dependencies:
+
+<Tabs>
+  <TabItem label="Mill">
+    ```scala
+    def mvnDeps = Seq(
+      mvn"me.romac::choreo:0.1.0",
+      mvn"org.typelevel::cats-effect:3.6.3"
+    )
+    ```
+  </TabItem>
+  <TabItem label="sbt">
+    ```scala
+    libraryDependencies ++= Seq(
+      "me.romac" %% "choreo" % "0.1.0",
+      "org.typelevel" %% "cats-effect" % "3.6.3"
+    )
+    ```
+  </TabItem>
+</Tabs>
+
+## Your First Choreography
+
+Let's build a minimal two-party choreography where Alice sends a greeting to Bob, and Bob prints it.
+
+### Define Locations
+
+Locations are singleton `String` types that identify participants:
+
+```scala
+import choreo.*
+import choreo.backend.Backend
+import cats.effect.IO
+import cats.effect.IO.asyncForIO
+import cats.syntax.all.*
+
+val alice: "alice" = "alice"
+val bob: "bob" = "bob"
+```
+
+### Write the Choreography
+
+A choreography describes the global interaction between all participants using a for-comprehension:
+
+```scala
+def greeting: Choreo[IO, Unit] =
+  for
+    msgA <- alice.locally(IO.pure("Hello from Alice!"))
+    msgB <- alice.send(msgA).to(bob)
+    _    <- bob.locally(IO.println(s"Bob received: ${msgB.!}"))
+  yield ()
+```
+
+Here is what each step does:
+
+- `alice.locally(...)` runs a local computation at Alice, producing a value of type `String @@ "alice"` -- a string owned by Alice.
+- `alice.send(msgA).to(bob)` sends Alice's message to Bob, producing a `String @@ "bob"`.
+- `bob.locally(...)` runs a local computation at Bob. Inside `locally`, Bob can unwrap his own values using the `!` operator.
+
+### Run the Choreography
+
+Create a backend and project the choreography for each participant:
+
+```scala
+def main: IO[Unit] =
+  for
+    backend   <- Backend.local(List(alice, bob))
+    aliceTask  = greeting.project(backend, alice)
+    bobTask    = greeting.project(backend, bob)
+    _         <- (aliceTask, bobTask).parTupled
+  yield ()
+```
+
+`Backend.local` creates an in-process backend with per-channel message queues. The `project` method performs endpoint projection (EPP), transforming the global choreography into a network program for a specific location. Finally, `parTupled` runs both participants concurrently.
+
+### Running the Example
+
+<Tabs>
+  <TabItem label="Mill">
+    If you have this code in your project:
+    ```sh
+    ./mill myproject.run
+    ```
+
+    Or, to try the built-in examples:
+    ```sh
+    ./mill examples.runMain choreo.examples.kv
+    ./mill examples.runMain choreo.examples.bookseller
+    ```
+  </TabItem>
+  <TabItem label="sbt">
+    If you have this code in your project:
+    ```sh
+    sbt run
+    ```
+
+    Or, to try the built-in examples:
+    ```sh
+    sbt "examples/runMain choreo.examples.kv"
+    sbt "examples/runMain choreo.examples.bookseller"
+    ```
+  </TabItem>
+</Tabs>
+
+## Next Steps
+
+- [Core Concepts](/concepts/) -- learn about locations, communication, branching, and endpoint projection.
+- [Examples](/examples/) -- see complete working examples.
