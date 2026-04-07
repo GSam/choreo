@@ -2,6 +2,8 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
+  site: "https://romac.github.io",
+  base: "/choreo",
   integrations: [
     starlight({
       title: "Choreo",
