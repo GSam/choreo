@@ -161,7 +161,7 @@ object TcpBackend:
       codec: WireCodec
   ): M[Unit] =
     Async[M]
-      .blocking {
+      .interruptible {
         val len = dis.readInt()
         val buf = new Array[Byte](len)
         dis.readFully(buf)
@@ -170,9 +170,10 @@ object TcpBackend:
       .flatMap(inbox.offer)
       .foreverM
       .handleErrorWith {
-        case _: java.io.EOFException       => Async[M].unit
-        case _: java.net.SocketException   => Async[M].unit
-        case e                             => Async[M].raiseError(e)
+        case _: java.io.EOFException     => Async[M].unit
+        case _: java.net.SocketException => Async[M].unit
+        case _: java.io.IOException      => Async[M].unit
+        case e                           => Async[M].raiseError(e)
       }
 
   /** Creates a TCP backend for a single location in a distributed multi-machine deployment.
