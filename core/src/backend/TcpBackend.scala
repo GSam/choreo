@@ -1,13 +1,15 @@
 package choreo
 package backend
 
-import cats.effect.{Async, Deferred, Resource}
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.effect.std.Queue
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 
 import java.io.{DataInputStream, DataOutputStream}
 import java.net.{InetSocketAddress, ServerSocket, Socket}
+
+import scala.concurrent.duration.{FiniteDuration, MILLISECONDS}
 
 import choreo.utils.toFunctionK
 
@@ -168,9 +170,153 @@ object TcpBackend:
       .flatMap(inbox.offer)
       .foreverM
       .handleErrorWith {
-        case _: java.io.EOFException => Async[M].unit
-        case e                       => Async[M].raiseError(e)
+        case _: java.io.EOFException       => Async[M].unit
+        case _: java.net.SocketException   => Async[M].unit
+        case e                             => Async[M].raiseError(e)
       }
+
+  /** Creates a TCP backend for a single location in a distributed multi-machine deployment.
+    *
+    * Unlike [[local]], which spins up all locations inside one process, this method runs exactly
+    * one location per process. Each location in the cluster must have a known socket address
+    * supplied in `addresses`. The node binds a server socket at its own address and connects
+    * to every peer. Connections to peers that are not yet available are retried with exponential
+    * backoff so that nodes may start in any order.
+    *
+    * {{{
+    *   val addresses = Map(
+    *     "alice" -> new InetSocketAddress("10.0.0.1", 9000),
+    *     "bob"   -> new InetSocketAddress("10.0.0.2", 9000)
+    *   )
+    *
+    *   // On alice's machine:
+    *   TcpBackend.distributed[IO](addresses, "alice").use { backend =>
+    *     choreo.project(backend, "alice")
+    *   }
+    * }}}
+    *
+    * @param addresses       mapping from each location name to its socket address
+    * @param myLoc           the location that this node will run
+    * @param codec           wire codec for serializing messages (default: Java serialization)
+    * @param connectRetries  maximum number of connection retry attempts per peer (default: 10)
+    * @param initialDelay    initial delay before retrying a failed connection (default: 250ms),
+    *                        doubled after each attempt
+    */
+  def distributed[M[_]: Async](
+      addresses: Map[Loc, InetSocketAddress],
+      myLoc: Loc,
+      codec: WireCodec = WireCodec.javaSerialization,
+      connectRetries: Int = 10,
+      initialDelay: FiniteDuration = FiniteDuration(250, MILLISECONDS)
+  ): Resource[M, TcpBackend[M]] =
+    require(addresses.contains(myLoc), s"Address map must contain an entry for '$myLoc'")
+    require(addresses.size >= 2, "Address map must contain at least two locations")
+
+    val allLocs = addresses.keys.toList.sorted
+    val peers   = allLocs.filter(_ != myLoc)
+
+    for
+      // 1. Bind server socket at our configured address
+      server <- Resource.make(
+                  Async[M].blocking {
+                    val ss = new ServerSocket()
+                    ss.setReuseAddress(true)
+                    ss.bind(addresses(myLoc))
+                    ss
+                  }
+                )(ss => Async[M].blocking(ss.close()))
+
+      // Track accepted sockets so we can close them during resource finalization,
+      // which unblocks any readLoop fibers still waiting on dis.readInt().
+      acceptedSockets <- Resource.eval(Ref.of[M, List[Socket]](Nil))
+
+      // 2. Create per-channel inboxes (channels where we are the receiver)
+      inboxes <- Resource.eval {
+                   peers
+                     .traverse(p => Queue.unbounded[M, Any].map((from = p, to = myLoc) -> _))
+                     .map(_.toMap)
+                 }
+
+      // 3. Accept connections from all peers (must run concurrently with step 4)
+      ready <- Resource.eval(Deferred[M, Unit])
+
+      _ <- {
+        val acceptAll = peers
+          .traverse_ { _ =>
+            for
+              result <- Async[M].blocking {
+                          val socket = server.accept()
+                          val dis    = new DataInputStream(socket.getInputStream)
+                          val len    = dis.readInt()
+                          val buf    = new Array[Byte](len)
+                          dis.readFully(buf)
+                          val sender = new String(buf, "UTF-8")
+                          (sender, socket, dis)
+                        }
+              (sender, socket, dis) = result
+              _ <- acceptedSockets.update(socket :: _)
+              _ <- readLoop(dis, inboxes((from = sender, to = myLoc)), codec).start
+            yield ()
+          }
+          .guarantee(ready.complete(()).void)
+
+        acceptAll.background
+      }
+
+      // 4. Connect to every peer with exponential-backoff retry
+      outputs <- peers
+                   .traverse { peer =>
+                     val peerAddr = addresses(peer)
+                     Resource
+                       .make(
+                         connectWithRetry(peerAddr, myLoc, connectRetries, initialDelay)
+                       ) { case (socket, _) =>
+                         Async[M].blocking(socket.close())
+                       }
+                       .map { case (_, dos) => (from = myLoc, to = peer) -> dos }
+                   }
+                   .map(_.toMap)
+
+      // 5. Wait for all acceptors to finish
+      _ <- Resource.eval(ready.get)
+
+      // 6. Ensure accepted sockets are closed on finalization
+      _ <- Resource.onFinalize {
+             acceptedSockets.get.flatMap {
+               _.traverse_(s => Async[M].blocking(s.close()).handleError(_ => ()))
+             }
+           }
+    yield TcpBackend(inboxes, outputs, allLocs, codec)
+
+  private def connectWithRetry[M[_]: Async](
+      addr: InetSocketAddress,
+      myLoc: Loc,
+      maxRetries: Int,
+      delay: FiniteDuration
+  ): M[(Socket, DataOutputStream)] =
+    def attempt(remaining: Int, currentDelay: FiniteDuration): M[(Socket, DataOutputStream)] =
+      Async[M]
+        .blocking {
+          val socket = new Socket()
+          socket.connect(addr)
+          val dos = new DataOutputStream(socket.getOutputStream)
+          val id  = myLoc.getBytes("UTF-8")
+          dos.writeInt(id.length)
+          dos.write(id)
+          dos.flush()
+          (socket, dos)
+        }
+        .handleErrorWith { e =>
+          if remaining <= 0 then
+            Async[M].raiseError(
+              new java.io.IOException(
+                s"Failed to connect to $addr after $maxRetries attempts: ${e.getMessage}",
+                e
+              )
+            )
+          else Async[M].sleep(currentDelay) *> attempt(remaining - 1, currentDelay * 2)
+        }
+    attempt(maxRetries, delay)
 
   given tcpBackend[M[_]: Async]: Backend[TcpBackend[M], M] with
     extension (b: TcpBackend[M])
