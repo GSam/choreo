@@ -1,0 +1,11 @@
+# Running distributed example
+
+./mill --no-server examples.runMain choreo.examples.distributedbookseller.aliceMain
+./mill --no-server examples.runMain choreo.examples.distributedbookseller.bobMain
+
+./mill examples.assembly
+java -cp out/examples/assembly.dest/out.jar choreo.examples.distributedbookseller.aliceMain
+java -cp out/examples/assembly.dest/out.jar choreo.examples.distributedbookseller.bobMain
+
+# Running distributed test
+./mill core.test -t choreo.DistributedTcpSuite
