@@ -2,7 +2,7 @@ package choreo
 package examples
 package distributedbookseller
 
-import cats.effect.{IO, IOApp, ExitCode}
+import cats.effect.{IO, IOApp}
 import cats.effect.IO.asyncForIO
 
 import java.net.InetSocketAddress
@@ -74,10 +74,8 @@ def runBob: IO[Unit] =
       protocol.project(backend, bob).void
   }
 
-@main def aliceMain: Unit =
-  import cats.effect.unsafe.implicits.global
-  runAlice.unsafeRunSync()
+object aliceMain extends IOApp.Simple:
+  def run: IO[Unit] = runAlice
 
-@main def bobMain: Unit =
-  import cats.effect.unsafe.implicits.global
-  runBob.unsafeRunSync()
+object bobMain extends IOApp.Simple:
+  def run: IO[Unit] = runBob
