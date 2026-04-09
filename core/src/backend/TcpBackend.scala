@@ -289,6 +289,119 @@ object TcpBackend:
            }
     yield TcpBackend(inboxes, outputs, allLocs, codec)
 
+  /** Creates a TCP server that accepts multiple client connections and runs a choreography
+    * independently for each one.
+    *
+    * The server binds to the given address and loops, accepting one client at a time. For each
+    * accepted connection, a fresh [[TcpBackend]] is created with isolated queues and streams,
+    * and the provided handler is invoked in a new fiber. This means many clients can be served
+    * concurrently, each running their own independent choreography session.
+    *
+    * The two-party session uses `serverLoc` and `clientLoc` as the location names.
+    *
+    * {{{
+    *   TcpBackend.server[IO](addr, "server", "client") { backend =>
+    *     protocol.project(backend, "server")
+    *   }
+    * }}}
+    *
+    * @param address    the address to bind the server socket to
+    * @param serverLoc  the location name for the server side of the choreography
+    * @param clientLoc  the location name for the client side of the choreography
+    * @param codec      wire codec for serializing messages (default: Java serialization)
+    * @param handler    a function that receives a per-session backend and runs the server's
+    *                   projection of the choreography
+    * @return           a Resource that manages the server socket and accept loop; the accept
+    *                   loop runs as a background fiber for the lifetime of the resource
+    */
+  def server[M[_]: Async](
+      address: InetSocketAddress,
+      serverLoc: Loc,
+      clientLoc: Loc,
+      codec: WireCodec = WireCodec.javaSerialization
+  )(handler: TcpBackend[M] => M[Unit]): Resource[M, Unit] =
+    val locs = List(serverLoc, clientLoc)
+
+    def acceptLoop(ss: ServerSocket): M[Nothing] =
+      val handle: M[Unit] =
+        for
+          result <- Async[M].blocking {
+                      val socket = ss.accept()
+                      val dis    = new DataInputStream(socket.getInputStream)
+                      val dos    = new DataOutputStream(socket.getOutputStream)
+                      (socket, dis, dos)
+                    }
+          (socket, dis, dos) = result
+          inbox  <- Queue.unbounded[M, Any]
+          _      <- readLoop(dis, inbox, codec, clientLoc).start
+          backend = TcpBackend[M](
+                      inboxes = Map((from = clientLoc, to = serverLoc) -> inbox),
+                      outputs = Map((from = serverLoc, to = clientLoc) -> dos),
+                      locs    = locs,
+                      codec   = codec
+                    )
+          _ <- (handler(backend).guarantee(
+                 Async[M].blocking(socket.close()).handleError(_ => ())
+               )).start
+        yield ()
+      handle.foreverM
+
+    for
+      ss <- Resource.make(
+              Async[M].blocking {
+                val ss = new ServerSocket()
+                ss.setReuseAddress(true)
+                ss.bind(address)
+                ss
+              }
+            )(ss => Async[M].blocking(ss.close()))
+
+      _ <- acceptLoop(ss).start.toResource
+    yield ()
+
+  /** Connects to a server and returns a session-scoped [[TcpBackend]] for running the client
+    * side of a two-party choreography.
+    *
+    * {{{
+    *   TcpBackend.connect[IO](addr, "server", "client").use { backend =>
+    *     protocol.project(backend, "client")
+    *   }
+    * }}}
+    *
+    * @param address    the server address to connect to
+    * @param serverLoc  the location name for the server side of the choreography
+    * @param clientLoc  the location name for the client side of the choreography
+    * @param codec      wire codec for serializing messages (default: Java serialization)
+    */
+  def connect[M[_]: Async](
+      address: InetSocketAddress,
+      serverLoc: Loc,
+      clientLoc: Loc,
+      codec: WireCodec = WireCodec.javaSerialization
+  ): Resource[M, TcpBackend[M]] =
+    val locs = List(serverLoc, clientLoc)
+
+    for
+      socket <- Resource.make(
+                  Async[M].blocking {
+                    val socket = new Socket()
+                    socket.connect(address)
+                    socket
+                  }
+                )(s => Async[M].blocking(s.close()))
+
+      dis <- Resource.eval(Async[M].blocking(new DataInputStream(socket.getInputStream)))
+      dos <- Resource.eval(Async[M].blocking(new DataOutputStream(socket.getOutputStream)))
+
+      inbox <- Resource.eval(Queue.unbounded[M, Any])
+      _     <- readLoop(dis, inbox, codec, serverLoc).start.toResource
+    yield TcpBackend[M](
+      inboxes = Map((from = serverLoc, to = clientLoc) -> inbox),
+      outputs = Map((from = clientLoc, to = serverLoc) -> dos),
+      locs    = locs,
+      codec   = codec
+    )
+
   private def connectWithRetry[M[_]: Async](
       addr: InetSocketAddress,
       myLoc: Loc,

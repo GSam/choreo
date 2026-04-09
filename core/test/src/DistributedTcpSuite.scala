@@ -184,4 +184,124 @@ class DistributedTcpSuite extends CatsEffectSuite {
       assertEquals(sLog, List("seller:price", "seller:date"))
     }
   }
+
+  // -- Server / Connect --
+
+  test("Server/Connect: round-trip send and receive") {
+    val serverLoc: "server" = "server"
+    val clientLoc: "client" = "client"
+
+    val c: Choreo[IO, String @@ "client"] =
+      for
+        a <- clientLoc.locally(IO.pure("ping"))
+        b <- clientLoc.send(a).to(serverLoc)
+        c <- serverLoc.locally(IO.pure(b.! + "-pong"))
+        d <- serverLoc.send(c).to(clientLoc)
+      yield d
+
+    for
+      port <- freePort
+      addr  = new InetSocketAddress("localhost", port)
+      result <- (
+        TcpBackend.server[IO](addr, serverLoc, clientLoc) { backend =>
+          c.project(backend, serverLoc).void
+        } *>
+        TcpBackend.connect[IO](addr, serverLoc, clientLoc)
+      ).use { clientBackend =>
+        c.project(clientBackend, clientLoc)
+      }
+    yield assertEquals(unwrap[clientLoc.type](result), "ping-pong")
+  }
+
+  test("Server/Connect: multiple concurrent clients") {
+    val serverLoc: "server" = "server"
+    val clientLoc: "client" = "client"
+
+    val c: Choreo[IO, Int @@ "client"] =
+      for
+        a <- clientLoc.locally(IO.pure(1))
+        b <- clientLoc.send(a).to(serverLoc)
+        c <- serverLoc.locally(IO.pure(b.! + 10))
+        d <- serverLoc.send(c).to(clientLoc)
+      yield d
+
+    for
+      port <- freePort
+      addr  = new InetSocketAddress("localhost", port)
+      results <- TcpBackend.server[IO](addr, serverLoc, clientLoc) { backend =>
+                   c.project(backend, serverLoc).void
+                 }.use { _ =>
+                   val connectAndRun = TcpBackend.connect[IO](addr, serverLoc, clientLoc).use { backend =>
+                     c.project(backend, clientLoc)
+                   }
+                   // Run 3 clients concurrently
+                   (connectAndRun, connectAndRun, connectAndRun).parTupled
+                 }
+    yield {
+      assertEquals(unwrap[clientLoc.type](results._1), 11)
+      assertEquals(unwrap[clientLoc.type](results._2), 11)
+      assertEquals(unwrap[clientLoc.type](results._3), 11)
+    }
+  }
+
+  test("Server/Connect: select branching") {
+    val serverLoc: "server" = "server"
+    val clientLoc: "client" = "client"
+
+    val c: Choreo[IO, String @@ "client"] =
+      for
+        flag   <- clientLoc.locally(IO.pure(true))
+        result <- clientLoc.select(flag)(
+                    true  -> serverLoc.locally(IO.pure("yes")),
+                    false -> serverLoc.locally(IO.pure("no"))
+                  )
+        msg    <- serverLoc.send(result).to(clientLoc)
+      yield msg
+
+    for
+      port <- freePort
+      addr  = new InetSocketAddress("localhost", port)
+      result <- (
+        TcpBackend.server[IO](addr, serverLoc, clientLoc) { backend =>
+          c.project(backend, serverLoc).void
+        } *>
+        TcpBackend.connect[IO](addr, serverLoc, clientLoc)
+      ).use { clientBackend =>
+        c.project(clientBackend, clientLoc)
+      }
+    yield assertEquals(unwrap[clientLoc.type](result), "yes")
+  }
+
+  test("Server/Connect: sessions are isolated") {
+    val serverLoc: "server" = "server"
+    val clientLoc: "client" = "client"
+
+    def echo(n: Int): Choreo[IO, Int @@ "client"] =
+      for
+        a <- clientLoc.locally(IO.pure(n))
+        b <- clientLoc.send(a).to(serverLoc)
+        c <- serverLoc.locally(IO.pure(b.! * 2))
+        d <- serverLoc.send(c).to(clientLoc)
+      yield d
+
+    for
+      port <- freePort
+      addr  = new InetSocketAddress("localhost", port)
+      results <- TcpBackend.server[IO](addr, serverLoc, clientLoc) { backend =>
+                   // Server doesn't know which value n is — each session is independent
+                   echo(0).project(backend, serverLoc).void
+                 }.use { _ =>
+                   val client1 = TcpBackend.connect[IO](addr, serverLoc, clientLoc).use { b =>
+                     echo(5).project(b, clientLoc)
+                   }
+                   val client2 = TcpBackend.connect[IO](addr, serverLoc, clientLoc).use { b =>
+                     echo(7).project(b, clientLoc)
+                   }
+                   (client1, client2).parTupled
+                 }
+    yield {
+      assertEquals(unwrap[clientLoc.type](results._1), 10)
+      assertEquals(unwrap[clientLoc.type](results._2), 14)
+    }
+  }
 }
