@@ -119,7 +119,7 @@ object TcpBackend:
                                   (sender, dis)
                                 }
                 (sender, dis) = result
-                _            <- readLoop(dis, inboxes((from = sender, to = loc)), codec).start
+                _            <- readLoop(dis, inboxes((from = sender, to = loc)), codec, sender).start
               yield ()
             }
           }
@@ -158,7 +158,8 @@ object TcpBackend:
   private def readLoop[M[_]: Async](
       dis: DataInputStream,
       inbox: Queue[M, Any],
-      codec: WireCodec
+      codec: WireCodec,
+      peer: String = "unknown"
   ): M[Unit] =
     Async[M]
       .interruptible {
@@ -170,9 +171,9 @@ object TcpBackend:
       .flatMap(inbox.offer)
       .foreverM
       .handleErrorWith {
-        case _: java.io.EOFException     => Async[M].unit
-        case _: java.net.SocketException => Async[M].unit
-        case _: java.io.IOException      => Async[M].unit
+        case _: java.io.EOFException     => Async[M].delay(println(s"[$peer] disconnected (EOF)"))
+        case _: java.net.SocketException => Async[M].delay(println(s"[$peer] disconnected (socket closed)"))
+        case _: java.io.IOException      => Async[M].delay(println(s"[$peer] disconnected (I/O error)"))
         case e                           => Async[M].raiseError(e)
       }
 
@@ -256,7 +257,7 @@ object TcpBackend:
                         }
               (sender, socket, dis) = result
               _ <- acceptedSockets.update(socket :: _)
-              _ <- readLoop(dis, inboxes((from = sender, to = myLoc)), codec).start
+              _ <- readLoop(dis, inboxes((from = sender, to = myLoc)), codec, sender).start
             yield ()
           }
           .guarantee(ready.complete(()).void)
