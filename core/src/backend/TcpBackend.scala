@@ -334,7 +334,7 @@ object TcpBackend:
                     }
           (socket, dis, dos) = result
           inbox  <- Queue.unbounded[M, Any]
-          _      <- readLoop(dis, inbox, codec).start
+          _      <- readLoop(dis, inbox, codec, clientLoc).start
           backend = TcpBackend[M](
                       inboxes = Map((from = clientLoc, to = serverLoc) -> inbox),
                       outputs = Map((from = serverLoc, to = clientLoc) -> dos),
@@ -395,7 +395,7 @@ object TcpBackend:
       dos <- Resource.eval(Async[M].blocking(new DataOutputStream(socket.getOutputStream)))
 
       inbox <- Resource.eval(Queue.unbounded[M, Any])
-      _     <- readLoop(dis, inbox, codec).start.toResource
+      _     <- readLoop(dis, inbox, codec, serverLoc).start.toResource
     yield TcpBackend[M](
       inboxes = Map((from = serverLoc, to = clientLoc) -> inbox),
       outputs = Map((from = clientLoc, to = serverLoc) -> dos),
