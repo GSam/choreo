@@ -8,4 +8,4 @@ java -cp out/examples/assembly.dest/out.jar choreo.examples.distributedbookselle
 java -cp out/examples/assembly.dest/out.jar choreo.examples.distributedbookseller.bobMain
 
 # Running distributed test
-./mill core.test -t choreo.DistributedTcpSuite
+./mill core.test.testOnly choreo.DistributedTcpSuite

@@ -185,6 +185,148 @@ class DistributedTcpSuite extends CatsEffectSuite {
     }
   }
 
+  // -- Select branching --
+
+  test("Distributed TCP: select true branch") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.select(flag)(
+                    true  -> bob.locally(IO.pure("yes")),
+                    false -> bob.locally(IO.pure("no"))
+                  )
+      yield result
+
+    for
+      addrs <- localAddresses(List(alice, bob))
+      result <- Resource.both(
+        TcpBackend.distributed[IO](addrs, alice),
+        TcpBackend.distributed[IO](addrs, bob)
+      ).use { (backendA, backendB) =>
+        for
+          aliceFib <- c.project(backendA, alice).start
+          bobRes   <- c.project(backendB, bob)
+          _        <- aliceFib.joinWithNever
+        yield bobRes
+      }
+    yield assertEquals(unwrap[bob.type](result), "yes")
+  }
+
+  test("Distributed TCP: select false branch") {
+    val c: Choreo[IO, String @@ "bob"] =
+      for
+        flag   <- alice.locally(IO.pure(false))
+        result <- alice.select(flag)(
+                    true  -> bob.locally(IO.pure("yes")),
+                    false -> bob.locally(IO.pure("no"))
+                  )
+      yield result
+
+    for
+      addrs <- localAddresses(List(alice, bob))
+      result <- Resource.both(
+        TcpBackend.distributed[IO](addrs, alice),
+        TcpBackend.distributed[IO](addrs, bob)
+      ).use { (backendA, backendB) =>
+        for
+          aliceFib <- c.project(backendA, alice).start
+          bobRes   <- c.project(backendB, bob)
+          _        <- aliceFib.joinWithNever
+        yield bobRes
+      }
+    yield assertEquals(unwrap[bob.type](result), "no")
+  }
+
+  test("Distributed TCP: select with communication in branch") {
+    val c: Choreo[IO, Int @@ "alice"] =
+      for
+        flag   <- alice.locally(IO.pure(true))
+        result <- alice.select(flag)(
+                    true  -> (for
+                      v <- bob.locally(IO.pure(42))
+                      r <- bob.send(v).to(alice)
+                    yield r),
+                    false -> alice.locally(IO.pure(0))
+                  )
+      yield result
+
+    for
+      addrs <- localAddresses(List(alice, bob))
+      result <- Resource.both(
+        TcpBackend.distributed[IO](addrs, alice),
+        TcpBackend.distributed[IO](addrs, bob)
+      ).use { (backendA, backendB) =>
+        for
+          aliceFib <- c.project(backendA, alice).start
+          bobRes   <- c.project(backendB, bob)
+          resultA  <- aliceFib.joinWithNever
+        yield resultA
+      }
+    yield assertEquals(unwrap[alice.type](result), 42)
+  }
+
+  // -- Par (parallel composition) --
+
+  test("Distributed TCP: par with disjoint locations") {
+    val left: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(42))
+        b <- alice.send(a).to(bob)
+      yield b
+
+    val right: Choreo[IO, String @@ "carol"] =
+      carol.locally(IO.pure("done"))
+
+    val c = left |*| right
+
+    for
+      addrs <- localAddresses(List(alice, bob, carol))
+      result <- Resource.both(
+        TcpBackend.distributed[IO](addrs, alice),
+        Resource.both(
+          TcpBackend.distributed[IO](addrs, bob),
+          TcpBackend.distributed[IO](addrs, carol)
+        )
+      ).use { case (backendA, (backendB, backendC)) =>
+        for
+          aliceFib <- c.project(backendA, alice).start
+          bobFib   <- c.project(backendB, bob).start
+          carolRes <- c.project(backendC, carol)
+          _        <- aliceFib.joinWithNever
+          bobRes   <- bobFib.joinWithNever
+        yield (bobRes, carolRes)
+      }
+    yield {
+      assertEquals(unwrap[bob.type](result._1._1), 42)
+      assertEquals(unwrap[carol.type](result._2._2), "done")
+    }
+  }
+
+  // -- Async communication --
+
+  test("Distributed TCP: asyncSend delivers value") {
+    val c: Choreo[IO, Int @@ "bob"] =
+      for
+        a <- alice.locally(IO.pure(99))
+        f <- alice.asyncSend(a).to(bob)
+        b <- bob.locally(f.!.map(_ + 1))
+      yield b
+
+    for
+      addrs <- localAddresses(List(alice, bob))
+      result <- Resource.both(
+        TcpBackend.distributed[IO](addrs, alice),
+        TcpBackend.distributed[IO](addrs, bob)
+      ).use { (backendA, backendB) =>
+        for
+          aliceFib <- c.project(backendA, alice).start
+          bobRes   <- c.project(backendB, bob)
+          _        <- aliceFib.joinWithNever
+        yield bobRes
+      }
+    yield assertEquals(unwrap[bob.type](result), 100)
+  }
+
   // -- Server / Connect --
 
   test("Server/Connect: round-trip send and receive") {
